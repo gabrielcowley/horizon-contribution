@@ -298,6 +298,68 @@ fn changing_jar_list_or_order_rebuilds_and_missing_after_compose_keeps_the_old_r
 }
 
 #[test]
+fn a_jar_take_list_keeps_only_its_prefixes_from_both_packs() {
+    let f = Fixture::new("take");
+    let recipe = r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stone"],"result":{"id":"minecraft:dirt","count":1}}"#;
+    let whole = f.jar(
+        "original",
+        'a',
+        &[
+            ("assets/original/lang/en_us.json", r#"{"a":"b"}"#),
+            ("assets/original_extra/lang/en_us.json", r#"{"c":"d"}"#),
+            ("assets/minecraft/atlases/blocks.json", r#"{"sources":[]}"#),
+            ("assets/minecraft/models/block/stone.json", "{}"),
+            ("data/original/recipe/probe.json", recipe),
+            ("data/foreign/recipe/probe.json", recipe),
+            ("data/c/tags/item/ingots.json", r#"{"values":[]}"#),
+        ],
+    );
+    let assets_only = whole
+        .clone()
+        .with_take(vec![
+            "assets/original".into(),
+            "assets/minecraft/atlases".into(),
+        ])
+        .unwrap();
+    let base = f.0.join("base");
+    let store = f.0.join("jars");
+    let cache = f.0.join("cache");
+    let mut mods = vec![f.content("alpha", &[], vec![assets_only.clone()])];
+    let root = resource_root_fixture(&base, &store, &mods, &cache).unwrap();
+    let resources = resolved_resources(&base, root.clone(), &store, &mods, cache.clone()).unwrap();
+    let assets = resources.source();
+    assert!(assets.contains("assets/original/lang/en_us.json"));
+    assert!(assets.contains("assets/minecraft/atlases/blocks.json"));
+    assert!(!assets.contains("assets/original_extra/lang/en_us.json"));
+    assert!(!assets.contains("assets/minecraft/models/block/stone.json"));
+    for path in [
+        "data/original/recipe/probe.json",
+        "data/foreign/recipe/probe.json",
+        "data/c/tags/item/ingots.json",
+    ] {
+        assert!(!resources.data().contains(path), "{path}");
+        assert!(!assets.contains(path), "{path}");
+    }
+
+    // Taking one data namespace layers it in the data pack, and nothing else of `data/`;
+    // the changed list builds a new root.
+    mods[0].jars[0] = whole
+        .clone()
+        .with_take(vec!["assets/original".into(), "data/original".into()])
+        .unwrap();
+    let with_data = resource_root_fixture(&base, &store, &mods, &cache).unwrap();
+    assert_ne!(with_data, root);
+    let resources = resolved_resources(&base, with_data, &store, &mods, cache).unwrap();
+    assert!(resources.data().contains("data/original/recipe/probe.json"));
+    assert!(!resources.data().contains("data/foreign/recipe/probe.json"));
+    assert!(
+        !resources
+            .source()
+            .contains("assets/minecraft/atlases/blocks.json")
+    );
+}
+
+#[test]
 fn accepted_jar_inputs_distinguish_unreadable_invalid_and_non_file_cache_entries() {
     let fixture = Fixture::new("accepted-input-errors");
     let root = fixture.0.join("accepted");

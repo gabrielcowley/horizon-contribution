@@ -3032,7 +3032,10 @@ struct ModLayer<'a> {
 
 impl<'a> ModLayer<'a> {
     fn new(id: String, source: crate::packs::Source, jar: Option<&'a JarRef>) -> Result<Self> {
-        let source = source.open()?;
+        let mut source = source.open()?;
+        if let Some(jar) = jar.filter(|jar| jar.take().is_some()) {
+            source = taken(&id, source, jar);
+        }
         let data = crate::datapack::DataPack::from_source(id.clone(), source.clone());
         Ok(Self {
             assets: crate::packs::Pack::mod_layer(id, crate::packs::Source::Opened(source)),
@@ -3040,6 +3043,34 @@ impl<'a> ModLayer<'a> {
             jar,
         })
     }
+}
+
+/// A jar's view holding only the files its `take` keeps, so its asset pack and its data
+/// pack never see the rest. An entry that keeps nothing is logged, not refused: the
+/// jar's hash pins its files, and `cargo horizon-mod use-jar --take` already checked them.
+fn taken(
+    layer: &str,
+    source: horizon_assets::resource_source::ResourceSource,
+    jar: &JarRef,
+) -> horizon_assets::resource_source::ResourceSource {
+    use horizon_assets::resource_source::{Resource, ResourceSource};
+    let names = source.list("");
+    for entry in jar.take().unwrap_or_default() {
+        let within = |name: &String| {
+            name.strip_prefix(entry.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        };
+        if !names.iter().any(within) {
+            log::warn!("Horizon: mod layer {layer}: take entry {entry} matches no file in the jar");
+        }
+    }
+    ResourceSource::indexed(
+        names
+            .into_iter()
+            .filter(|name| jar.takes(name))
+            .map(|name| (name.clone(), Resource::file(source.clone(), name)))
+            .collect(),
+    )
 }
 
 struct ModLayers<'a> {
