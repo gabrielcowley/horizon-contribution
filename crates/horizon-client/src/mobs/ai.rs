@@ -1994,7 +1994,11 @@ fn base_tick(
             let water_breathing = m.has_effect("minecraft:water_breathing")
                 || m.has_effect("minecraft:conduit_power");
             let nautilus = m.has_effect("minecraft:breath_of_the_nautilus");
-            let drowns = submerged && !can_breathe_under_water(m) && !water_breathing && !nautilus;
+            // `can_breathe_under_water` (the entity tag) is water's alone: NeoForge asks a mod
+            // fluid's `canDrownIn` instead, so an undead mob drowns in one that `can_drown` (the
+            // Original's oracle trace: a zombie's air runs down in Create's honey, not in water).
+            let breathes_here = m.fluids.eye_in_water && can_breathe_under_water(m);
+            let drowns = submerged && !breathes_here && !water_breathing && !nautilus;
             let held = submerged && nautilus && !water_breathing;
             let max = m.max_air_supply();
             let vanilla = Breath {

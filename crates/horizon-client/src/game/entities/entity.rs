@@ -213,11 +213,22 @@ pub(super) trait Entity: EntityRules {
         fluids: &horizon_client::motion::FluidResources,
         context: &horizon_world::native_load_context::LoopContext,
     ) -> (f64, f64) {
+        let (water, lava, _) = self.push_by_fluid_and_swim(world, fluids, context);
+        (water, lava)
+    }
+    /// [`Self::push_by_fluid`], also answering how deep the entity is in a mod fluid it can swim
+    /// in (`can_swim`), 0 when in none.
+    fn push_by_fluid_and_swim(
+        &mut self,
+        world: &horizon_client::world::World,
+        fluids: &horizon_client::motion::FluidResources,
+        context: &horizon_world::native_load_context::LoopContext,
+    ) -> (f64, f64, f64) {
         if !self.is_pushed_by_fluid() {
-            return (0.0, 0.0);
+            return (0.0, 0.0, 0.0);
         }
         let (bounds, at, eye) = (self.bounds(), self.position(), self.fluid_eye_y());
-        let (water, lava, _) = horizon_client::entities::update_entity_fluids(
+        let (water, lava, _, swim) = horizon_client::entities::update_entity_fluids_and_swim(
             bounds,
             at,
             eye,
@@ -226,7 +237,7 @@ pub(super) trait Entity: EntityRules {
             fluids,
             context,
         );
-        (water, lava)
+        (water, lava, swim)
     }
     /// `BubbleColumnBlock.entityInside` through `applyEffectsFromBlocks`: a
     /// column lifts or drags every kind alike.

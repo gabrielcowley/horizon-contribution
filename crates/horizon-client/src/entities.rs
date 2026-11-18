@@ -92,7 +92,9 @@ mod item_move;
 mod item_no_physics;
 pub mod nameplate;
 mod obstacles;
-pub use fluids::{fall_reset_hit, fluid_flow, update_entity_fluids, water_clip};
+pub use fluids::{
+    fall_reset_hit, fluid_flow, update_entity_fluids, update_entity_fluids_and_swim, water_clip,
+};
 pub use item_merge::{ItemCells, merge_with_neighbours};
 pub use obstacles::ObstacleGrid;
 

@@ -99,6 +99,21 @@ pub fn update_entity_fluids(
     fluids: &FluidResources,
     context: &LoopContext,
 ) -> (f64, f64, bool) {
+    let (water, lava, eye, _) =
+        update_entity_fluids_and_swim(bounds, position, eye_y, velocity, world, fluids, context);
+    (water, lava, eye)
+}
+/// [`update_entity_fluids`], also answering how deep the entity is in the deepest mod fluid it
+/// can swim in (`can_swim`), 0 when in none: NeoForge floats an item in such a fluid as in water.
+pub fn update_entity_fluids_and_swim(
+    bounds: Aabb,
+    position: Vec3,
+    eye_y: f64,
+    velocity: &mut Vec3,
+    world: &World,
+    fluids: &FluidResources,
+    context: &LoopContext,
+) -> (f64, f64, bool, f64) {
     let mut interaction = EntityFluidInteraction::new([WATER, LAVA]);
     let mut scene = EntityFluidWorld {
         bounds,
@@ -110,7 +125,7 @@ pub fn update_entity_fluids(
         context,
     };
     if interaction.update(&mut scene, false, 4096).is_err() {
-        return (0.0, 0.0, false);
+        return (0.0, 0.0, false, 0.0);
     }
     let water_height = interaction.fluid_height(&scene, WATER);
     let lava_height = interaction.fluid_height(&scene, LAVA);
@@ -129,7 +144,11 @@ pub fn update_entity_fluids(
     );
     // The current of each mod fluid that pushes entities, at its own `motion_scale`.
     let _ = interaction.apply_mod_currents(&mut scene);
-    (water_height, lava_height, eye_in_water)
+    let swim_height = interaction
+        .immersion()
+        .filter(|immersion| immersion.rules.can_swim)
+        .map_or(0.0, |immersion| immersion.height);
+    (water_height, lava_height, eye_in_water, swim_height)
 }
 impl ItemEntity {
     /// `Entity.getEyeY` of an item (eye height 0.2125), where

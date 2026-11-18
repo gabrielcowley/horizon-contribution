@@ -59,7 +59,9 @@ impl ItemTables<'_> {
         // Entity.baseTick splashes before moving, except on the first tick, at
         // the motion before the currents push it.
         let before = item.velocity;
-        let heights = item.push_by_fluid(self.world, &self.motion.fluids, self.context);
+        let (water, lava, swim) =
+            item.push_by_fluid_and_swim(self.world, &self.motion.fluids, self.context);
+        let heights = (water, lava);
         let mut splashed = 0;
         item.water_entry(heights.0 > 0.0, item.ticks == 0, before, &mut |s| {
             splashed += 1;
@@ -72,7 +74,9 @@ impl ItemTables<'_> {
             self.collision,
             escape_speed.is_some(),
             escape_speed,
-            heights,
+            // NeoForge's `ItemEntity.tick` floats an item in a mod fluid it can swim in, deeper
+            // than 0.1, as in water (the Original's oracle trace: a stick in Create's honey).
+            (water.max(swim), lava),
             entity_boxes,
             Some(self.border),
             Some(&self.motion.blocks),
