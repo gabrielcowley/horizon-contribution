@@ -1,6 +1,6 @@
 use super::*;
 use crate::datapack::{self, DataPack, DataStore};
-use horizon_mod_package::manifest::MissingJar;
+use horizon_mod_package::manifest::{MissingJar, Side};
 use std::io::Write as _;
 
 struct Fixture(PathBuf);
@@ -383,6 +383,7 @@ fn accepted_jar_inputs_distinguish_unreadable_invalid_and_non_file_cache_entries
     let requirements = [horizon_mod_package::manifest::JarRequirement {
         owners: vec!["alpha".into(), "beta".into()],
         jar: jar.clone(),
+        side: Side::Both,
     }];
     fixture.write(
         &format!("accepted/{JAR_INPUTS}"),

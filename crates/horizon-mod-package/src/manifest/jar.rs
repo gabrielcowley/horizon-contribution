@@ -5,10 +5,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use super::Side;
+
 /// An original Java jar used as a passive asset/data layer, in manifest order.
 ///
 /// `take` lists the path prefixes of the jar the mod layers, each `assets/<namespace>` or
-/// `data/<namespace>`, optionally deeper; without it the whole jar is layered.
+/// `data/<namespace>`, optionally deeper; without it the whole jar is layered. A jar whose
+/// `take` names no `data/` prefix is client-only ([`JarRef::side`]).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(try_from = "Fields")]
 pub struct JarRef {
@@ -43,12 +46,14 @@ impl TryFrom<Fields> for JarRef {
 
 /// One exact file and every Horizon mod requiring it, in load order.
 ///
-/// The jar is the exact file's identity, without any owner's `take`.
+/// `side` is the widest of its owners' jar sides: [`Side::Client`] only when every owner's
+/// `take` leaves out `data/`. The jar is the exact file's identity, without any owner's `take`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(try_from = "RequirementFields")]
 pub struct JarRequirement {
     pub owners: Vec<String>,
     pub jar: JarRef,
+    pub side: Side,
 }
 
 #[derive(Deserialize)]
@@ -56,12 +61,30 @@ pub struct JarRequirement {
 struct RequirementFields {
     owners: Vec<String>,
     jar: JarRef,
+    #[serde(default = "both_sides")]
+    side: Side,
+}
+
+fn both_sides() -> Side {
+    Side::Both
+}
+
+impl JarRequirement {
+    /// Whether an installation of `side` needs this file: a client needs every jar, a
+    /// server (a dedicated server, the server export, a headless run) only those whose side
+    /// is [`Side::Both`].
+    pub fn needed_on(&self, side: Side) -> bool {
+        side != Side::Server || self.side == Side::Both
+    }
 }
 
 impl TryFrom<RequirementFields> for JarRequirement {
     type Error = String;
 
     fn try_from(fields: RequirementFields) -> Result<Self, Self::Error> {
+        if !matches!(fields.side, Side::Client | Side::Both) {
+            return Err(format!("invalid jar side: {:?}", fields.side));
+        }
         if fields.jar.take.is_some() {
             return Err(format!(
                 "jar {}: a requirement names no take",
@@ -78,6 +101,7 @@ impl TryFrom<RequirementFields> for JarRequirement {
         Ok(Self {
             owners: fields.owners,
             jar: fields.jar,
+            side: fields.side,
         })
     }
 }
@@ -168,7 +192,7 @@ impl std::error::Error for JarConflict {}
 
 /// Collect exact files once, preserving all owning mod ids in input load order.
 /// The returned hash order is for preparation only; pack layers stay per mod.
-/// Owners may take different parts of one file.
+/// Owners may take different parts of one file; the requirement's side is the widest.
 pub fn collect_jar_requirements<'a>(
     mods: impl IntoIterator<Item = (&'a str, &'a [JarRef])>,
 ) -> Result<Vec<JarRequirement>, JarConflict> {
@@ -182,6 +206,9 @@ pub fn collect_jar_requirements<'a>(
                         second: Box::new(jar.identity()),
                     });
                 }
+                if jar.side() == Side::Both {
+                    first.side = Side::Both;
+                }
                 if !first.owners.iter().any(|id| id == owner) {
                     first.owners.push(owner.to_owned());
                 }
@@ -191,12 +218,23 @@ pub fn collect_jar_requirements<'a>(
                     JarRequirement {
                         owners: vec![owner.to_owned()],
                         jar: jar.identity(),
+                        side: jar.side(),
                     },
                 );
             }
         }
     }
     Ok(hashes.into_values().collect())
+}
+
+/// The requirements an installation of `side` needs ([`JarRequirement::needed_on`]).
+pub fn jar_requirements_for<'a>(
+    side: Side,
+    mods: impl IntoIterator<Item = (&'a str, &'a [JarRef])>,
+) -> Result<Vec<JarRequirement>, JarConflict> {
+    let mut requirements = collect_jar_requirements(mods)?;
+    requirements.retain(|requirement| requirement.needed_on(side));
+    Ok(requirements)
 }
 
 /// Missing exact files in a jar cache, with every requiring mod retained.
@@ -327,6 +365,21 @@ impl JarRef {
         self.take
             .as_ref()
             .is_none_or(|take| take.iter().any(|entry| prefix_covers(entry, path)))
+    }
+
+    /// Which installations need this jar: [`Side::Client`] when its `take` names no `data/`
+    /// prefix, so dedicated servers, the server export and headless runs never fetch or open
+    /// it; [`Side::Both`] without `take` or with any `data/` entry.
+    pub fn side(&self) -> Side {
+        match &self.take {
+            Some(take) if !take.iter().any(|entry| entry.starts_with("data/")) => Side::Client,
+            _ => Side::Both,
+        }
+    }
+
+    /// Whether a run of `side` layers this jar: see [`JarRequirement::needed_on`].
+    pub fn needed_on(&self, side: Side) -> bool {
+        side != Side::Server || self.side() == Side::Both
     }
 
     /// The exact file's identity, without the `take` of the mod listing it.
@@ -529,5 +582,54 @@ mod tests {
             assert!(with_take(bad).is_err(), "{bad}");
         }
         assert!(with_take("['assets/create', 'assets/create_extra']").is_ok());
+    }
+
+    #[test]
+    fn a_jar_taking_no_data_is_client_only_and_a_shared_file_takes_the_widest_side() {
+        let assets = with_take("['assets/create']").unwrap();
+        let data = with_take("['assets/create', 'data/create']").unwrap();
+        let whole = assets.identity();
+        assert_eq!(assets.side(), Side::Client);
+        assert_eq!(data.side(), Side::Both);
+        assert_eq!(whole.side(), Side::Both);
+
+        let client = collect_jar_requirements([("alpha", std::slice::from_ref(&assets))]).unwrap();
+        assert_eq!(client[0].side, Side::Client);
+        assert_eq!(client[0].jar, whole);
+        assert!(client[0].needed_on(Side::Client));
+        assert!(!client[0].needed_on(Side::Server));
+        assert!(
+            jar_requirements_for(Side::Server, [("alpha", std::slice::from_ref(&assets))])
+                .unwrap()
+                .is_empty()
+        );
+
+        let shared = collect_jar_requirements([
+            ("alpha", std::slice::from_ref(&assets)),
+            ("beta", std::slice::from_ref(&data)),
+        ])
+        .unwrap();
+        assert_eq!(shared.len(), 1);
+        assert_eq!(shared[0].owners, ["alpha", "beta"]);
+        assert_eq!(shared[0].side, Side::Both);
+        assert!(shared[0].needed_on(Side::Server));
+
+        let recorded = serde_json::to_value(&client[0]).unwrap();
+        assert_eq!(recorded["side"], "client");
+        assert_eq!(
+            serde_json::from_value::<JarRequirement>(recorded).unwrap(),
+            client[0]
+        );
+        let mut earlier = serde_json::to_value(&shared[0]).unwrap();
+        earlier.as_object_mut().unwrap().remove("side");
+        assert_eq!(
+            serde_json::from_value::<JarRequirement>(earlier)
+                .unwrap()
+                .side,
+            Side::Both
+        );
+        let mut server = serde_json::to_value(&shared[0]).unwrap();
+        server["side"] = serde_json::json!("server");
+        assert!(serde_json::from_value::<JarRequirement>(server).is_err());
     }
 }

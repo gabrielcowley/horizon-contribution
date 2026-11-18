@@ -203,6 +203,7 @@ fn use_jar_take_records_checked_prefixes_and_refuses_one_matching_nothing() {
         horizon_mod_package::Manifest::parse(&fs::read_to_string(&manifest).unwrap()).unwrap();
     let listed = parsed.jar.last().unwrap();
     assert_eq!(listed.take().unwrap(), take);
+    assert_eq!(listed.side(), horizon_mod_package::manifest::Side::Client);
     assert!(use_jar(&take).status.success());
     let other = use_jar(&["assets/original_mod"]);
     assert!(!other.status.success());
