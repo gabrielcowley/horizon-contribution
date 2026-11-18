@@ -35,6 +35,6 @@ The insert is real, with no simulate step, and it sees the state of the tick so 
 - **Stale actions.** An action whose block is no longer the state it touched, or whose entity has died or been discarded, is not called.
 - **Failures.** The callback runs in a transaction. A native panic or a wasm trap rolls back every write it made, leaves the entity as it was, and switches the part's `contact_action` off for the session (a wasm trap stops its mod's group).
 - **Sharing a block.** Every part attached to the block state hears every action queued there: ignore one you cannot decode.
-- **Which entities.** Dropped items, on the server, so far. Actions queued for players, mobs and projectiles are dropped until their moves call them back.
+- **Which entities.** Players, mobs, dropped items and projectiles, on the server. A dropped item or a projectile is called back in its own tick; a mob straight after its tick, with its row back in the level's list, before the next mob ticks; a player in its own turn, after the server has checked its moves. A player is never discarded, and only a dropped item has a stack.
 
 See the hook notes in [`contact_action.rs`](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/contact_action.rs) and [`entity_after_fall_on.rs`](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/entity_after_fall_on.rs).

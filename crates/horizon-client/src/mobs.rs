@@ -1513,6 +1513,9 @@ pub struct Mob {
     pub fall_distance: f64,
     /// `Entity.stuckSpeedMultiplier`: the next move is scaled by it.
     pub stuck_multiplier: Vec3,
+    /// The contact actions this mob's move queued, waiting for the game to call them back
+    /// once its tick ends, before the next mob moves.
+    pub contact_actions: Vec<crate::block_contact::QueuedAction>,
     /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
     /// block has pushed this mob this tick (0.51 at most on any axis).
     pub piston: horizon_world::piston_movement::PistonMovement,
@@ -3604,6 +3607,7 @@ impl Mob {
             ambient_timer: 0,
             fall_distance: 0.0,
             stuck_multiplier: Vec3::ZERO,
+            contact_actions: Vec::new(),
             piston: Default::default(),
             persistent: false,
             random,

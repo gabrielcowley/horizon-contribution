@@ -52,6 +52,11 @@ mod contact_action_tests {
                 );
                 panic!("a contact action panics after a write");
             }
+            if !event.entity.is_item() {
+                // Anything but an item is lifted half a block a tick.
+                event.entity.movement[1] = 0.5;
+                return;
+            }
             let mut held = self.held.lock().unwrap();
             if *held == 0 && event.entity.item.take().is_some() {
                 *held += 1;
@@ -188,6 +193,50 @@ mod contact_action_tests {
                     *part.called.lock().unwrap(),
                     1,
                     "the part is switched off after its panic"
+                );
+            });
+        });
+    }
+
+    /// A player's contact action runs in its own turn: the part's movement write is what
+    /// the player keeps, and a dead player's actions are dropped.
+    #[test]
+    #[ignore = "daily"]
+    fn a_players_contact_action_moves_it_and_skips_the_dead() {
+        let part = DepotPart::default();
+        let mods = install("contact-player", &part);
+        mod_platform::testing::with_mods(mods, || {
+            crate::game::native_entity_refs::tests::with_game(|game| {
+                let _ = depot_and_item(game, 7);
+                let stone = game.world.block(0, 100, 0);
+                if game.player.is_none() {
+                    game.player = Some(
+                        horizon_client::motion::PlayerMotion::new(
+                            game.motion,
+                            horizon_core::geometry::Vec3::new(0.5, 101.0, 0.5),
+                        )
+                        .unwrap(),
+                    );
+                }
+                let queued = || horizon_client::block_contact::QueuedAction {
+                    moment: mod_api::ContactMoment::AfterFallOn,
+                    state: stone,
+                    position: horizon_core::position::BlockPos::new(0, 100, 0),
+                    action: mod_api::ContactAction::new(&1u8).unwrap(),
+                };
+                horizon_client::block_contact::in_level(Some("minecraft:overworld"), || {
+                    game.run_player_contact_actions(vec![queued()]);
+                });
+                assert_eq!(game.player.as_ref().unwrap().velocity.y, 0.5);
+                assert_eq!(*part.called.lock().unwrap(), 1);
+                game.player.as_mut().unwrap().health.dead = true;
+                horizon_client::block_contact::in_level(Some("minecraft:overworld"), || {
+                    game.run_player_contact_actions(vec![queued()]);
+                });
+                assert_eq!(
+                    *part.called.lock().unwrap(),
+                    1,
+                    "a dead player's action is dropped"
                 );
             });
         });

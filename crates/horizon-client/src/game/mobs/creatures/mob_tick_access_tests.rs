@@ -480,3 +480,76 @@ fn a_tick_hook_discards_another_mob_nested() {
         });
     });
 }
+
+/// A contact action on stone that reads the mob through its handle and sets its movement.
+#[derive(Clone, Default)]
+struct ContactProbe(Arc<Mutex<Vec<(i32, Option<[f64; 3]>)>>>);
+
+#[mod_api::horizon_part]
+impl mod_api::BlockPart for ContactProbe {
+    fn contact_action(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::ContactActionEvent<'_>,
+    ) {
+        let live = host
+            .entity(event.entity.id as u32)
+            .and_then(|entity| entity.position(host));
+        self.0.lock().unwrap().push((event.entity.id, live));
+        event.entity.movement = [0.25, 0.0, 0.0];
+    }
+}
+
+struct ContactMod(ContactProbe);
+
+#[mod_api::__subscriptions]
+impl mod_api::Hooks for ContactMod {
+    fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+        let stone = r.block_key("minecraft:stone");
+        r.block_part(stone, self.0.clone());
+    }
+}
+
+/// A mob whose tick queued a contact action: the loop stops after it, and the action is
+/// called with the mob's row back in the level's list, so its handle resolves; what the
+/// part leaves in the record is what the mob keeps, and the action is used up.
+#[test]
+#[ignore = "daily"]
+fn a_mobs_contact_action_runs_after_its_tick_with_its_row_live() {
+    let probe = ContactProbe::default();
+    let entry = || ModEntry::new("mob-contact-action", Box::new(ContactMod(probe.clone())));
+    crate::game::api_values::install_parts(&[entry()]).unwrap();
+    let mods: mod_api::Mods = vec![entry()].into();
+    mod_platform::testing::with_mods(mods, || {
+        with_two_pigs(|game| {
+            let stone = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:stone")
+                .unwrap();
+            game.world.set(1, 79, 0, stone).unwrap();
+            let queued = horizon_client::block_contact::QueuedAction {
+                moment: mod_api::ContactMoment::AfterFallOn,
+                state: stone,
+                position: horizon_core::position::BlockPos::new(1, 79, 0),
+                action: mod_api::ContactAction(vec![1]),
+            };
+            game.mobs
+                .iter_mut()
+                .find(|m| m.id == 71)
+                .unwrap()
+                .contact_actions = vec![queued];
+            horizon_client::block_contact::in_level(Some("minecraft:overworld"), || {
+                game.tick_creature_entities().unwrap();
+            });
+            let calls = probe.0.lock().unwrap().clone();
+            assert_eq!(calls.len(), 1, "one action, called once: {calls:?}");
+            assert_eq!(calls[0].0, 71);
+            assert!(calls[0].1.is_some(), "the mob's row is live when it runs");
+            let pig = game.mobs.iter().find(|m| m.id == 71).unwrap();
+            assert!(pig.contact_actions.is_empty(), "the action is used up");
+            assert_eq!(pig.velocity.x, 0.25, "the mob keeps the part's movement");
+        });
+    });
+}

@@ -213,6 +213,11 @@ impl Game<'_> {
                     let pos = w.legacy_on_position()?;
                     let state = w.block_state(pos)?;
                     w.check_fall_damage(moved[1], on_ground, state, pos)?;
+                    // Entity.move's landing response on a part's block: a move that
+                    // ends on the ground, as vanilla's does every tick it stands.
+                    if on_ground && moved[1] <= 0.0 {
+                        w.after_fall_on_contact(state, pos);
+                    }
                     // handlePlayerPositionChange: a move that goes up ends the fall
                     // (`resetFallDistance`), after that move's own fall check.
                     if moved[1] > 0.0 {
@@ -262,6 +267,10 @@ impl Game<'_> {
                 w.server_player_pose_tick()
             };
             let mut events = std::mem::take(&mut w.player.events);
+            let contact_actions = std::mem::take(&mut w.player.contact_actions);
+            // The contact actions the moves queued, in this player's own turn, after its
+            // planned inside writes.
+            game.run_player_contact_actions(contact_actions);
             if let Some((at, alive)) = rose {
                 game.end_tracked_fall(at, alive);
             }

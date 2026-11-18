@@ -396,6 +396,9 @@ pub struct PlayerMotion {
     /// The block fallOn currently running, consumed by its damage call.
     pub(crate) block_landing: Option<(BlockStateId, BlockPos, f64)>,
     pub stuck_multiplier: Vec3,
+    /// The contact actions this player's move queued, waiting for the game to call them
+    /// back in the player's own turn.
+    pub contact_actions: Vec<crate::block_contact::QueuedAction>,
     /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
     /// block has pushed this entity this tick (0.51 at most on any axis).
     pub piston: horizon_world::piston_movement::PistonMovement,
@@ -1684,6 +1687,7 @@ impl MotionWorld<'_, '_, '_> {
         // contained, leaving the player's tick as it was.
         let mut staged = mod_api::InsideEffects::default();
         let mut writes = Vec::new();
+        let mut actions = Vec::new();
         let mut level = crate::health::DamageLevel::of(
             &mut *self.scene,
             self.assets.registry,
@@ -1702,13 +1706,60 @@ impl MotionWorld<'_, '_, '_> {
                 precise,
                 &mut staged,
                 &mut writes,
-                // Contact actions are called for dropped items so far: this kind's are
-                // dropped, as the hook documents.
-                &mut Vec::new(),
+                &mut actions,
             );
             effects.absorb_step(staged);
             crate::block_contact::inside_written(state, p, writes);
+            // The game calls them back in this player's own turn, after its planned writes.
+            crate::block_contact::queue_actions(
+                &mut self.player.contact_actions,
+                mod_api::ContactMoment::Inside,
+                state,
+                p,
+                actions,
+            );
         }
+    }
+    /// `Block.updateEntityAfterFallOn` for a part's block: a move of this player ended on
+    /// top of `state` at `p`. The part is told on the level random host, and the contact
+    /// actions it queues wait in the player for the game to call back in its own turn.
+    /// Nothing runs where no part listens or no server level is in scope.
+    pub fn after_fall_on_contact(&mut self, state: BlockStateId, p: BlockPos) {
+        let Some(dimension) = crate::block_contact::current_level() else {
+            return;
+        };
+        let Some(hooks) = crate::block_contact::HOOKS.get() else {
+            return;
+        };
+        if !(hooks.after_fall_on_listens)(state) {
+            return;
+        }
+        let mut actions = Vec::new();
+        let mut level = crate::health::DamageLevel::of(
+            &mut *self.scene,
+            self.assets.registry,
+            self.tag_items,
+            self.block_registries,
+            self.damage_hooks,
+        );
+        (hooks.after_fall_on)(
+            dimension,
+            &mut level,
+            crate::block_contact::Contact {
+                entity: self.player.entity_id,
+                kind: "minecraft:player",
+                state,
+                position: p,
+            },
+            &mut actions,
+        );
+        crate::block_contact::queue_actions(
+            &mut self.player.contact_actions,
+            mod_api::ContactMoment::AfterFallOn,
+            state,
+            p,
+            actions,
+        );
     }
 
     /// A typed entity write an `entity_inside` part queued, applied to this

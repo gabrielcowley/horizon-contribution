@@ -1531,6 +1531,7 @@ impl crate::block_contact::InsideWalk for MobInside<'_, '_, '_> {
         {
             let mut staged = mod_api::InsideEffects::default();
             let mut writes = Vec::new();
+            let mut actions = Vec::new();
             let kind = self.m.kind.id.clone();
             let id = self.m.id as i32;
             (hooks.inside_fire)(
@@ -1543,12 +1544,18 @@ impl crate::block_contact::InsideWalk for MobInside<'_, '_, '_> {
                 precise,
                 &mut staged,
                 &mut writes,
-                // Contact actions are called for dropped items so far: this kind's are
-                // dropped, as the hook documents.
-                &mut Vec::new(),
+                &mut actions,
             );
             effects.absorb_step(staged);
             crate::block_contact::inside_written(state, at, writes);
+            // The game calls them back once this mob's tick ends, before the next mob moves.
+            crate::block_contact::queue_actions(
+                &mut self.m.contact_actions,
+                mod_api::ContactMoment::Inside,
+                state,
+                at,
+                actions,
+            );
         }
         // PowderSnowBlock.entityInside: a burning mob destroys the
         // block (`canEntityGrief` for the mob), then EXTINGUISH puts it out.

@@ -602,6 +602,8 @@ impl horizon_client::block_contact::InsideWalk for ItemInside<'_, '_> {
 pub(in crate::game) struct ProjectileInside<'a, 'g> {
     pub(in crate::game) game: &'a mut Game<'g>,
     pub(in crate::game) shot: &'a mut Projectile,
+    /// The contact actions the parts the walk reaches queue, for the projectile's own tick.
+    pub(in crate::game) actions: &'a mut Vec<horizon_client::block_contact::QueuedAction>,
 }
 
 impl horizon_client::block_contact::InsideWalk for ProjectileInside<'_, '_> {
@@ -644,8 +646,15 @@ impl horizon_client::block_contact::InsideWalk for ProjectileInside<'_, '_> {
         effects: &mut mod_api::InsideEffects,
     ) -> std::result::Result<(), ()> {
         let (id, kind) = (self.shot.id, self.shot.entity_type());
-        self.game
-            .fire_batch_inside(id as i32, kind, state, at, precise, effects, None);
+        self.game.fire_batch_inside(
+            id as i32,
+            kind,
+            state,
+            at,
+            precise,
+            effects,
+            Some(&mut *self.actions),
+        );
         Ok(())
     }
 }
@@ -853,7 +862,12 @@ impl Game<'_> {
             return;
         }
         let mut effects = mod_api::InsideEffects::default();
-        let mut inside = ProjectileInside { game: self, shot };
+        let mut actions = Vec::new();
+        let mut inside = ProjectileInside {
+            game: self,
+            shot,
+            actions: &mut actions,
+        };
         let movement = horizon_world::entity_move::MovementRecord {
             from: inside.shot.previous,
             to: inside.shot.position,
@@ -866,7 +880,12 @@ impl Game<'_> {
             &mut visited,
             &mut effects,
         );
-        let ProjectileInside { game, shot } = inside;
+        let ProjectileInside {
+            game,
+            shot,
+            actions: queued,
+        } = inside;
+        let actions = std::mem::take(queued);
         for planned in effects.take_planned() {
             if !shot_alive(shot) {
                 break;
@@ -875,6 +894,8 @@ impl Game<'_> {
                 game.apply_projectile_write(shot, write);
             }
         }
+        // The contact actions, in the projectile's own tick after its planned writes.
+        game.run_contact_actions(&mut super::contact_actions::SweptProjectile(shot), actions);
     }
 
     /// A typed entity write for a projectile, applied in its own tick. A
@@ -955,7 +976,6 @@ impl Game<'_> {
         lent.give_back(&mut self.world);
         effects.absorb_step(staged);
         horizon_client::block_contact::inside_written(state, at, writes);
-        // Only a kind that calls its actions back keeps them: a projectile's are dropped.
         if let Some(actions) = actions {
             horizon_client::block_contact::queue_actions(
                 actions,
@@ -1016,113 +1036,6 @@ impl Game<'_> {
             at,
             queued,
         );
-    }
-
-    /// The contact actions an item's move queued, called back in its own tick with the
-    /// server write host, in the order they were queued. An action is skipped when its
-    /// block is no longer the state it touched, and the rest stop once the item is gone.
-    /// Each call runs in a transaction: a native panic or a wasm trap rolls back what it
-    /// wrote and leaves the item as it was (the dispatch has already switched the part
-    /// off for the session). Whether the item is gone: taken whole or discarded.
-    pub(in crate::game) fn run_item_contact_actions(
-        &mut self,
-        item: &mut ItemEntity,
-        actions: Vec<horizon_client::block_contact::QueuedAction>,
-    ) -> bool {
-        use crate::game::api_values::{TryIntoApi, TryIntoEngine};
-        let Some(dimension) = horizon_client::block_contact::current_level() else {
-            return false;
-        };
-        for queued in actions {
-            if item.health <= 0 || item.stack.count == 0 {
-                return true;
-            }
-            let pos = queued.position;
-            if self.world.block(pos.x, pos.y, pos.z) != queued.state {
-                continue;
-            }
-            let Ok(stack) = item.stack.try_into_api() else {
-                continue;
-            };
-            let mut entity = mod_api::ContactEntity {
-                id: item.id as i32,
-                kind: "minecraft:item".to_owned(),
-                position: [item.position.x, item.position.y, item.position.z],
-                movement: [item.velocity.x, item.velocity.y, item.velocity.z],
-                on_ground: item.on_ground,
-                stuck_in_block: None,
-                item: Some(stack),
-                discard: false,
-            };
-            let failures = self.wasm_dispatch_failures.get();
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                mod_api::run_transaction(self, |game, _| {
-                    game.native_contact_action(crate::game::native_hooks::ContactActionCall {
-                        dimension,
-                        moment: queued.moment,
-                        state: queued.state,
-                        pos,
-                        action: &queued.action,
-                        entity: &mut entity,
-                    });
-                    (game.wasm_dispatch_failures.get() == failures)
-                        .then_some(())
-                        .ok_or(())
-                })
-            }));
-            match outcome {
-                Ok(Ok(())) => {}
-                Ok(Err(())) => {
-                    log::error!(
-                        "a contact action at {pos:?}: its writes were rolled back after a wasm dispatch failure"
-                    );
-                    continue;
-                }
-                Err(payload) => {
-                    let panic = payload
-                        .downcast_ref::<&str>()
-                        .map(|text| (*text).to_owned())
-                        .or_else(|| payload.downcast_ref::<String>().cloned())
-                        .unwrap_or_else(|| "box".to_owned());
-                    log::error!(
-                        "a contact action at {pos:?}: its writes were rolled back after a native mod panicked: {panic}"
-                    );
-                    continue;
-                }
-            }
-            // The swept entity keeps what the part left it, as vanilla's blocks write
-            // the entity directly.
-            let finite = |v: [f64; 3]| v.iter().all(|c| c.is_finite());
-            if finite(entity.position) {
-                let [x, y, z] = entity.position;
-                item.position = Vec3::new(x, y, z);
-            }
-            if finite(entity.movement) {
-                let [x, y, z] = entity.movement;
-                item.velocity = Vec3::new(x, y, z);
-            }
-            item.on_ground = entity.on_ground;
-            if let Some(factors) = entity.stuck_in_block.filter(|f| finite(*f)) {
-                // An item keeps no stuck multiplier: its movement is scaled once, as
-                // `EntityWrite::StuckIn` scales it.
-                item.velocity = Vec3::new(
-                    item.velocity.x * factors[0],
-                    item.velocity.y * factors[1],
-                    item.velocity.z * factors[2],
-                );
-                item.fall_distance = 0.0;
-            }
-            match entity.item.map(|stack| stack.try_into_engine(self.items())) {
-                Some(Ok(stack)) if stack.count > 0 => item.stack = stack,
-                Some(Ok(_)) | None => return true,
-                // A stack the game can't hold is refused: the item keeps its own.
-                Some(Err(_)) => {}
-            }
-            if entity.discard {
-                return true;
-            }
-        }
-        false
     }
 
     pub(super) fn tick_item_with_block_contacts(

@@ -168,6 +168,9 @@ impl Game<'_> {
             // position write was captured, stop after this mob, restore the
             // list, and tell its writes while the live row is readable.
             let mut section_yield = false;
+            // A mob whose move queued contact actions: stop after it, restore the list,
+            // and call them back with its row live before the next mob moves.
+            let mut contact_yield = None;
             {
                 let ticking = self.entity_ticking_area();
                 let players = self.level_players();
@@ -545,6 +548,13 @@ impl Game<'_> {
                     };
                     super::super::tick_profile::end_mob(level_id, sampled);
                     let m = &mut mobs[i];
+                    if !m.contact_actions.is_empty() {
+                        if kept && m.alive() && !m.removed {
+                            contact_yield = Some(m.id);
+                        } else {
+                            m.contact_actions.clear();
+                        }
+                    }
                     // Its `xo` (`previous`) is where its tick began, unless a teleport in the
                     // tick (`snapTo`) moved it along: that teleport, then where the tick left
                     // it, are two position updates (`EntityInLevelCallback.onMove` for each).
@@ -647,12 +657,13 @@ impl Game<'_> {
                         from,
                     );
                     cursor += 1;
-                    if section_yield {
+                    if section_yield || contact_yield.is_some() {
                         break;
                     }
                 }
             }
-            if pause.is_none() && retry_rider.is_none() && !section_yield {
+            if pause.is_none() && retry_rider.is_none() && !section_yield && contact_yield.is_none()
+            {
                 break;
             }
             // No MobWorld, DamageLevel or navigation loan crosses this boundary.
@@ -688,6 +699,9 @@ impl Game<'_> {
                         &mut sections.borrow_mut(),
                         &mut section_moves,
                     );
+                }
+                if let Some(id) = contact_yield {
+                    self.run_mob_contact_actions(id);
                 }
                 if let Some(id) = retry_rider {
                     self.dismount_mob(id);
@@ -760,7 +774,7 @@ impl Game<'_> {
                 path_writes.append(writes);
             }
             lent = horizon_client::health::LentLevel::take(&mut self.world);
-            resuming = retry_rider.is_none() && !section_yield;
+            resuming = retry_rider.is_none() && !section_yield && contact_yield.is_none();
             retried_rider = retry_rider;
         }
         laps.lap("creature_loop");

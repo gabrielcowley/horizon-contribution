@@ -877,7 +877,51 @@ impl Mob {
                 },
                 input,
             );
+            // Entity.move's landing response on a part's block: the contact actions it
+            // queues wait in the mob for the game to call back once its tick ends.
+            if vertical && wanted.y < 0.0 {
+                let state = w.world.block(on.0, on.1, on.2);
+                self.after_fall_on_contact(level, BlockPos::new(on.0, on.1, on.2), state);
+            }
         }
+    }
+    /// `Block.updateEntityAfterFallOn` for a part's block, told on the mob's lent level.
+    /// Nothing runs where no part listens or no server level is in scope.
+    fn after_fall_on_contact(
+        &mut self,
+        level: &mut DamageLevel<'_>,
+        at: BlockPos,
+        state: horizon_world::registry::BlockStateId,
+    ) {
+        let Some(dimension) = crate::block_contact::current_level() else {
+            return;
+        };
+        let Some(hooks) = crate::block_contact::HOOKS.get() else {
+            return;
+        };
+        if !(hooks.after_fall_on_listens)(state) {
+            return;
+        }
+        let mut actions = Vec::new();
+        let kind = self.kind.id.clone();
+        (hooks.after_fall_on)(
+            dimension,
+            level,
+            crate::block_contact::Contact {
+                entity: self.id as i32,
+                kind: &kind,
+                state,
+                position: at,
+            },
+            &mut actions,
+        );
+        crate::block_contact::queue_actions(
+            &mut self.contact_actions,
+            mod_api::ContactMoment::AfterFallOn,
+            state,
+            at,
+            actions,
+        );
     }
     /// `Entity.getBlockSpeedFactor` at the mob's feet.
     fn block_speed_factor(&self, w: &MobWorld) -> f32 {

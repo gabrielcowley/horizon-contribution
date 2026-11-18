@@ -1,4 +1,5 @@
 # Scoped read-host mob tick access and item lifetime regressions need resources.
+horizon-client game::creatures::borrowed_tick::mob_tick_access_tests::a_mobs_contact_action_runs_after_its_tick_with_its_row_live lib daily resources
 horizon-client game::creatures::borrowed_tick::mob_tick_access_tests::a_removed_mob_handle_resolves_nothing_in_a_later_callback lib daily resources
 horizon-client game::creatures::borrowed_tick::mob_tick_access_tests::a_tick_hook_discards_another_mob_nested lib daily resources
 horizon-client game::creatures::borrowed_tick::mob_tick_access_tests::entity_tick_pre_reads_and_moves_the_ticking_mob lib daily resources
