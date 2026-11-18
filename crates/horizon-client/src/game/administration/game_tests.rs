@@ -1154,7 +1154,9 @@ impl Game<'_> {
         let context = self.test_context(info);
         // A panic fails the attempt, as one in the test function does.
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ticker.tick(self, &context)))
-            .map_err(|payload| TestError::Unknown(super::dedicated::panic_message(payload.as_ref())))
+            .map_err(|payload| {
+                TestError::Unknown(super::dedicated::panic_message(payload.as_ref()))
+            })
     }
 
     /// The attempt's `GameTestContext`: its level, structure and tick.
@@ -2261,7 +2263,11 @@ mod registered_game_test_tests {
         pass_at: Option<i32>,
     }
     impl GameTestFunction for Polling {
-        fn run(&self, _: &mut dyn mod_api::ServerHost, context: &GameTestContext) -> GameTestResult {
+        fn run(
+            &self,
+            _: &mut dyn mod_api::ServerHost,
+            context: &GameTestContext,
+        ) -> GameTestResult {
             let attempt = self
                 .attempts
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2322,7 +2328,14 @@ mod registered_game_test_tests {
                 let mut def = TestDef::sample(false, 3, 1);
                 def.function = Some("example:poll".into());
                 def.callback = Some(function);
-                Info::new(1, "example:poll".into(), def, Some((0, 64, 0)), Dim::Overworld, Rotation::None)
+                Info::new(
+                    1,
+                    "example:poll".into(),
+                    def,
+                    Some((0, 64, 0)),
+                    Dim::Overworld,
+                    Rotation::None,
+                )
             };
 
             // Waits to the timeout: asked on tick 0 straight after `run`, once
@@ -2340,8 +2353,18 @@ mod registered_game_test_tests {
             assert_eq!(
                 *waits.log.lock().unwrap(),
                 [
-                    "run 0 @0", "tick 0 @0", "tick 0 @1", "tick 0 @2", "tick 0 @3", "tick 0 @4",
-                    "run 1 @0", "tick 1 @0", "tick 1 @1", "tick 1 @2", "tick 1 @3", "tick 1 @4",
+                    "run 0 @0",
+                    "tick 0 @0",
+                    "tick 0 @1",
+                    "tick 0 @2",
+                    "tick 0 @3",
+                    "tick 0 @4",
+                    "run 1 @0",
+                    "tick 1 @0",
+                    "tick 1 @1",
+                    "tick 1 @2",
+                    "tick 1 @3",
+                    "tick 1 @4",
                 ]
             );
 
