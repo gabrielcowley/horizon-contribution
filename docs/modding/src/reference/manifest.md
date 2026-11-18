@@ -209,7 +209,8 @@ loads. Entries are compared case-sensitively and whole segment by whole segment,
 names at least a namespace, and may go deeper, down to a single file. The manifest is refused for an empty
 list, a leading, trailing or doubled `/`, a `.` or `..` segment, `\`, a glob character (`*`, `?`, `[`, `]`,
 `{`, `}`), a repeated entry or one another entry already covers. There are no globs and no excludes.
-Two mods listing the same file each layer their own `take`.
+`use-jar --take` also refuses an entry that matches no file in the jar; the game, which trusts the hash,
+only logs one. Two mods listing the same file each layer their own `take`.
 
 Original jars stay in `<game home>/jars/<sha512>.jar`; no bytes are copied into a
 mod. The launcher checks and supplies exact files, and the existing ZIP readers
