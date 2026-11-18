@@ -133,7 +133,10 @@ mod generated {
         include!(concat!(env!("OUT_DIR"), "/dispatch_fixtures_api.rs"));
     }
     include!(concat!(env!("OUT_DIR"), "/mod_api_generated.rs"));
-    pub(super) use self::mod_api::{BlockEntityTickReply, BlockFace, BlockKey, BlockState};
+    pub(super) use self::mod_api::{
+        BlockEntityTickReply, BlockFace, BlockKey, BlockState, ContactAction, ContactEntity,
+        ContactMoment,
+    };
     pub use horizon_mod_api_macros::__subscriptions;
 }
 use generated::*;

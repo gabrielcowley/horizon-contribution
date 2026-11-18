@@ -147,5 +147,13 @@ mod root {
                     })
             })
         }
+        /// An isolated Part hook's parts with their mod's id; the fixture's parts all belong
+        /// to one stand-in mod.
+        pub(super) fn entered_parts_with_id<'a, P: ?Sized>(
+            parts: &'a [&'a P],
+            _: &'static str,
+        ) -> impl Iterator<Item = (&'static str, &'a P)> {
+            parts.iter().map(|part| ("fixture", *part))
+        }
     }
 }

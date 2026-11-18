@@ -980,7 +980,7 @@ pub(super) fn emit<'a>(
                     // that unwinds poisons its mod for this hook and lets the unwind go on to the
                     // game, which rolls back what the callback wrote.
                     format!(
-                        "for (__part_mod, {part_item}) in super::runtime::entered_parts_with_id({part_list}, \"{name}\") {{ if super::runtime::poisoned(HookId::{hook_id}, __part_mod) {{ continue; }} if let Err(__unwound) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{ {} }})) {{ super::runtime::poison(HookId::{hook_id}, __part_mod); std::panic::resume_unwind(__unwound); }} }}",
+                        "for (__part_mod, {part_item}) in super::runtime::entered_parts_with_id({part_list}, \"{name}\") {{ if super::runtime::poisoned(HookId::{hook_id}, __part_mod) {{ continue; }}\nif let Err(__unwound) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{ {} }})) {{ super::runtime::poison(HookId::{hook_id}, __part_mod); std::panic::resume_unwind(__unwound); }} }}",
                         call(&part_item, "return"),
                     )
                 } else {

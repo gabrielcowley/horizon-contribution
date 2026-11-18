@@ -65,7 +65,7 @@ impl ContactAction {
 /// tick, as vanilla's `entityInside` and `updateEntityAfterFallOn` write the entity
 /// directly. Non-finite positions or movements are not written back.
 // exhaustive: the swept entity's writable record is a closed snapshot the game fills and reads back.
-#[derive(Clone, Debug, PartialEq, horizon_mod_api_macros::Wire)]
+#[derive(Clone, Debug, Default, PartialEq, horizon_mod_api_macros::Wire)]
 pub struct ContactEntity {
     /// The entity's id (`Entity.getId`).
     pub id: i32,
