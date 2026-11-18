@@ -932,6 +932,7 @@ pub enum RecipeLayout {
 /// One result of a recipe the panel shows (`panel_recipes`): a slot cycling
 /// through `stacks`, one a second, and the chance in percent the recipe gives
 /// it (`Some(25.0)` draws "25%"); `None` gives it every time.
+// exhaustive: a mod builds it with a literal; the game reads it
 #[derive(Clone, Debug, Default, PartialEq, horizon_mod_api_macros::Wire)]
 pub struct RecipeResult {
     /// The stacks the slot cycles through, at most 64.
@@ -953,6 +954,7 @@ pub struct RecipeResult {
 ///     ..RecipeView::default()
 /// };
 /// ```
+// exhaustive: a mod builds it with a literal; the game reads it
 #[derive(Clone, Debug, Default, PartialEq, horizon_mod_api_macros::Wire)]
 pub struct RecipeView {
     /// How the panel lays it out.
