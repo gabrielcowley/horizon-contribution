@@ -1,9 +1,12 @@
 //! Functions registered for the in-world game test runner.
 use crate::ServerHost;
+use crate::wire::{Reader, Wire, WireError, Writer};
 use std::{collections::BTreeMap, sync::Arc};
 
+crate::wire::wire_handlers::handler!(dyn GameTestTicker, "GameTestTicker");
+
 /// The outcome of a function invocation. Pending keeps the runner's timeout active.
-#[derive(Clone, Debug, Default, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[derive(Clone, Default, horizon_mod_api_macros::Wire)]
 pub enum GameTestResult {
     /// Complete this attempt successfully.
     Pass,
@@ -12,6 +15,61 @@ pub enum GameTestResult {
     /// Leave this attempt running until its timeout.
     #[default]
     Pending,
+    /// Keep this attempt running and ask the ticker every tick, starting with the tick `run`
+    /// returned on, until it answers [`GameTestTick::Pass`] or [`GameTestTick::Fail`] or the
+    /// attempt times out. The runner keeps the ticker for this attempt only: a retry calls `run`
+    /// again, so per-attempt state belongs in the ticker.
+    Poll(Arc<dyn GameTestTicker>),
+}
+impl std::fmt::Debug for GameTestResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Pass => f.write_str("Pass"),
+            Self::Fail(message) => f.debug_tuple("Fail").field(message).finish(),
+            Self::Pending => f.write_str("Pending"),
+            Self::Poll(_) => f.write_str("Poll(..)"),
+        }
+    }
+}
+/// Two `Poll` results are equal when they hold the same ticker.
+impl PartialEq for GameTestResult {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Pass, Self::Pass) | (Self::Pending, Self::Pending) => true,
+            (Self::Fail(a), Self::Fail(b)) => a == b,
+            (Self::Poll(a), Self::Poll(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+impl Eq for GameTestResult {}
+
+/// A polled attempt's answer for one tick.
+#[derive(Clone, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+pub enum GameTestTick {
+    /// Complete this attempt successfully on this tick.
+    Pass,
+    /// Complete this attempt with an assertion message on this tick.
+    Fail(String),
+    /// Not yet: ask again next tick. If the attempt times out, it fails with the reason the
+    /// ticker gave on the timeout tick; an empty reason fails it as a timeout with no result.
+    Waiting(String),
+}
+/// The answer of a ticker that couldn't answer, such as a wasm mod's that trapped: the attempt
+/// fails, as it does when a native ticker panics.
+impl Default for GameTestTick {
+    fn default() -> Self {
+        Self::Fail("the game test's ticker did not answer".into())
+    }
+}
+
+/// The per-tick check of one attempt, returned by [`GameTestFunction::run`] in
+/// [`GameTestResult::Poll`]: vanilla's `succeedWhen`-style sequences, built by the mod.
+pub trait GameTestTicker: Send + Sync + 'static {
+    /// Called on the tick `run` returned and then once every tick until the attempt ends, with
+    /// the same level and structure as `run` and the current [`GameTestContext::tick`]. Keep
+    /// the attempt's state in the ticker. A panic fails the attempt, as one in `run` does.
+    fn tick(&self, host: &mut dyn ServerHost, context: &GameTestContext) -> GameTestTick;
 }
 
 /// API-owned coordinates for one attempt, valid only during its callback.
@@ -24,15 +82,24 @@ pub struct GameTestContext {
     pub origin: [i32; 3],
     /// Structure rotation in clockwise quarter turns.
     pub rotation: u8,
+    /// The attempt's tick, vanilla's `GameTestHelper.getTick()`: 0 on the tick `run` is called,
+    /// after the setup ticks, then counting up by one each tick.
+    pub tick: i32,
 }
 impl GameTestContext {
-    /// Construct the context at the engine boundary.
+    /// Construct the context at the engine boundary, on tick 0.
     pub fn new(level: crate::LevelRef, origin: [i32; 3], rotation: u8) -> Self {
         Self {
             level,
             origin,
             rotation,
+            tick: 0,
         }
+    }
+    /// The same context on another tick.
+    pub fn with_tick(mut self, tick: i32) -> Self {
+        self.tick = tick;
+        self
     }
     /// Convert structure-relative coordinates to world coordinates.
     pub fn absolute_pos(&self, [x, y, z]: [i32; 3]) -> [i32; 3] {

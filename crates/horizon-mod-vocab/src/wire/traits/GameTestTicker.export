@@ -1,0 +1,1 @@
+The per-tick check of a polled game test attempt, called by the runner every tick until it passes, fails or times out.

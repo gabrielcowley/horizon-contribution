@@ -8,9 +8,11 @@
 //! flaky tests (`max_attempts`, `required_successes`) go through
 //! `ReportGameListener`'s counters and `GameTestRunner.rerunTest`.
 //!
-//! Not ported: test sequences (`GameTestSequence`: the built-in tests, only
-//! `always_pass`, do not use them), test environments other than the empty
-//! `all_of`, and removing the entities of a finished test.
+//! Test sequences (`GameTestSequence`) are not ported as such: a mod's test
+//! function returns `GameTestResult::Poll` with a ticker the runner asks every
+//! tick where vanilla ticks its sequences, and the mod builds `succeedWhen` and
+//! the rest on it. Not ported: test environments other than the empty `all_of`,
+//! and removing the entities of a finished test.
 use super::{
     Dim, Game,
     commands::{Target, execute::Source},
@@ -170,6 +172,9 @@ pub(super) struct Info {
     rerun: bool,
     /// `succeed` removes the entities around the structure; the game does it.
     discard_entities: bool,
+    /// A mod function's ticker for this attempt (`GameTestResult::Poll`): where
+    /// vanilla keeps the attempt's sequences. A rerun starts without one.
+    ticker: Option<std::sync::Arc<dyn mod_api::GameTestTicker>>,
 }
 
 impl Info {
@@ -201,6 +206,7 @@ impl Info {
             origin: id,
             rerun: false,
             discard_entities: false,
+            ticker: None,
         }
     }
 
@@ -265,6 +271,36 @@ impl Info {
     /// `startExecution(tickDelay)`.
     fn start_execution(&mut self, tick_delay: i32) {
         self.tick_count = -(self.def.setup_ticks + tick_delay + 1);
+    }
+
+    /// One answer of the attempt's ticker, where vanilla ticks its sequences:
+    /// `tickAndContinue` before the timeout, `tickAndFailIfNotComplete` on the
+    /// timeout tick. Before the timeout, `Waiting` is "not yet"; on it, the
+    /// attempt fails with the reason given then, or with no result when the
+    /// reason is empty. A pass on the timeout tick still times out, as a
+    /// sequence that completes then does in vanilla.
+    fn answer(&mut self, answer: Result<mod_api::GameTestTick, TestError>, timed_out: bool) {
+        use mod_api::GameTestTick;
+        match answer {
+            Err(error) => self.error = Some(error),
+            Ok(GameTestTick::Pass) => self.succeed(),
+            Ok(GameTestTick::Fail(message)) => self.fail(Text::literal(message)),
+            Ok(GameTestTick::Waiting(reason)) if timed_out && !reason.is_empty() => {
+                self.fail(Text::literal(reason));
+            }
+            Ok(GameTestTick::Waiting(_)) => {}
+        }
+        if timed_out && self.error.is_none() {
+            self.error = Some(self.no_result());
+        }
+    }
+
+    /// `test.error.timeout.no_result`.
+    fn no_result(&self) -> TestError {
+        TestError::Timeout(Text::translate(
+            "test.error.timeout.no_result",
+            &[number(self.def.max_ticks)],
+        ))
     }
 
     /// `onEachTick`: the action on every tick from now to the timeout.
@@ -1094,13 +1130,46 @@ impl Game<'_> {
                 info.error = Some(error);
             }
         }
-        if info.tick_count > info.def.max_ticks {
+        let timed_out = info.tick_count > info.def.max_ticks;
+        match info.ticker.clone() {
+            // The ticker stands where vanilla ticks the attempt's sequences:
+            // after `startTest` and the actions due, every tick, the start
+            // tick included, until the attempt ends.
+            Some(ticker) if !info.done && info.error.is_none() => {
+                let answer = self.poll_test(info, ticker.as_ref());
+                info.answer(answer, timed_out);
+            }
             // No sequences: the test had no result in time.
-            info.error = Some(TestError::Timeout(Text::translate(
-                "test.error.timeout.no_result",
-                &[number(info.def.max_ticks)],
-            )));
+            _ if timed_out => info.error = Some(info.no_result()),
+            _ => {}
         }
+    }
+
+    /// One call of a polled attempt's ticker, on the attempt's current tick.
+    fn poll_test(
+        &mut self,
+        info: &Info,
+        ticker: &dyn mod_api::GameTestTicker,
+    ) -> Result<mod_api::GameTestTick, TestError> {
+        let context = self.test_context(info);
+        // A panic fails the attempt, as one in the test function does.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ticker.tick(self, &context)))
+            .map_err(|payload| TestError::Unknown(super::dedicated::panic_message(payload.as_ref())))
+    }
+
+    /// The attempt's `GameTestContext`: its level, structure and tick.
+    fn test_context(&self, info: &Info) -> mod_api::GameTestContext {
+        mod_api::GameTestContext::new(
+            self.level(self.dim.id()).expect("test server level"),
+            self.test_origin(info),
+            match info.rotation() {
+                Rotation::None => 0,
+                Rotation::Clockwise90 => 1,
+                Rotation::Clockwise180 => 2,
+                Rotation::Counterclockwise90 => 3,
+            },
+        )
+        .with_tick(info.tick_count)
     }
 
     /// `GameTestInfo.startTest`.
@@ -1119,16 +1188,7 @@ impl Game<'_> {
             return self.run_block_based(info);
         }
         if let Some(callback) = info.def.callback.clone() {
-            let context = mod_api::GameTestContext::new(
-                self.level(self.dim.id()).expect("test server level"),
-                self.test_origin(info),
-                match info.rotation() {
-                    Rotation::None => 0,
-                    Rotation::Clockwise90 => 1,
-                    Rotation::Clockwise180 => 2,
-                    Rotation::Counterclockwise90 => 3,
-                },
-            );
+            let context = self.test_context(info);
             // A test exception fails this attempt, as GameTestInfo.startTest does;
             // it must not unwind out of the server tick and stop the remaining tests.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1146,6 +1206,12 @@ impl Game<'_> {
                     Err(info.assertion(Text::literal(message)))
                 }
                 mod_api::GameTestResult::Pending => Ok(()),
+                // Asked first in this same tick, once `tickInternal` reaches
+                // the sequences.
+                mod_api::GameTestResult::Poll(ticker) => {
+                    info.ticker = Some(ticker);
+                    Ok(())
+                }
             };
         }
         let function = info.def.function.as_deref().unwrap_or_default();
@@ -1946,6 +2012,65 @@ pub(in crate::game) mod tests {
         *report_of(&mut reports, original.origin).1 += 1;
         assert_eq!(reports, vec![(1, 1, 1)]);
     }
+
+    struct Never;
+    impl mod_api::GameTestTicker for Never {
+        fn tick(
+            &self,
+            _: &mut dyn mod_api::ServerHost,
+            _: &mod_api::GameTestContext,
+        ) -> mod_api::GameTestTick {
+            mod_api::GameTestTick::Waiting(String::new())
+        }
+    }
+
+    #[test]
+    fn a_rerun_asks_its_function_for_a_fresh_ticker() {
+        let mut original = info(false, 10, 0);
+        original.ticker = Some(std::sync::Arc::new(Never));
+        assert!(original.copy_reset(2).ticker.is_none());
+    }
+
+    #[test]
+    fn a_polled_attempt_runs_until_its_ticker_passes_or_fails() {
+        use mod_api::GameTestTick::{Fail, Pass, Waiting};
+        let mut waiting = info(false, 10, 0);
+        waiting.answer(Ok(Waiting("lamp is off".into())), false);
+        assert!(!waiting.done && waiting.error.is_none());
+        waiting.answer(Ok(Pass), false);
+        assert!(waiting.done && waiting.error.is_none() && waiting.discard_entities);
+        let mut failing = info(false, 10, 0);
+        failing.tick_count = 4;
+        failing.answer(Ok(Fail("wrong block".into())), false);
+        let Some(TestError::Assert { message, tick: 4 }) = &failing.error else {
+            panic!("expected an assertion on tick 4: {:?}", failing.error);
+        };
+        assert_eq!(message.plain(), "wrong block");
+        let mut panicked = info(false, 10, 0);
+        panicked.answer(Err(TestError::Unknown("ticker panicked".into())), false);
+        assert!(matches!(&panicked.error, Some(TestError::Unknown(m)) if m == "ticker panicked"));
+    }
+
+    #[test]
+    fn a_polled_timeout_fails_with_the_reason_given_on_the_timeout_tick() {
+        use mod_api::GameTestTick::{Pass, Waiting};
+        // `tickAndFailIfNotComplete`: the sequence's own assertion is the failure.
+        let mut reason = info(false, 10, 0);
+        reason.tick_count = 11;
+        reason.answer(Ok(Waiting("lamp is off".into())), true);
+        let Some(TestError::Assert { message, tick: 11 }) = &reason.error else {
+            panic!("expected the waiting reason on tick 11: {:?}", reason.error);
+        };
+        assert_eq!(message.plain(), "lamp is off");
+        // No reason: no result in time.
+        let mut silent = info(false, 10, 0);
+        silent.answer(Ok(Waiting(String::new())), true);
+        assert!(matches!(silent.error, Some(TestError::Timeout(_))));
+        // A pass on the timeout tick finishes the attempt and then times out.
+        let mut late = info(false, 10, 0);
+        late.answer(Ok(Pass), true);
+        assert!(late.done && matches!(late.error, Some(TestError::Timeout(_))));
+    }
 }
 
 #[cfg(test)]
@@ -2124,6 +2249,115 @@ mod registered_game_test_tests {
                 .unwrap();
         }
     }
+    /// Logs each call with the attempt's tick; its ticker waits until `pass_at`.
+    struct Polling {
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+        attempts: std::sync::atomic::AtomicUsize,
+        pass_at: Option<i32>,
+    }
+    struct Ticker {
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+        attempt: usize,
+        pass_at: Option<i32>,
+    }
+    impl GameTestFunction for Polling {
+        fn run(&self, _: &mut dyn mod_api::ServerHost, context: &GameTestContext) -> GameTestResult {
+            let attempt = self
+                .attempts
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("run {attempt} @{}", context.tick));
+            GameTestResult::Poll(Arc::new(Ticker {
+                log: self.log.clone(),
+                attempt,
+                pass_at: self.pass_at,
+            }))
+        }
+    }
+    impl mod_api::GameTestTicker for Ticker {
+        fn tick(
+            &self,
+            _: &mut dyn mod_api::ServerHost,
+            context: &GameTestContext,
+        ) -> mod_api::GameTestTick {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("tick {} @{}", self.attempt, context.tick));
+            if self.pass_at == Some(context.tick) {
+                mod_api::GameTestTick::Pass
+            } else {
+                mod_api::GameTestTick::Waiting(format!("not yet at {}", context.tick))
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_polled_test_is_asked_on_its_start_tick_and_every_tick_after() {
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(horizon_client::chunk::Chunk::empty(0, 0)));
+            let attempt = |game: &mut Game<'_>, info: &mut Info| {
+                info.start_execution(0);
+                for _ in 0..10 {
+                    game.tick_internal(info);
+                    if info.done || info.error.is_some() {
+                        break;
+                    }
+                }
+            };
+            let polling = |pass_at| {
+                Arc::new(Polling {
+                    log: Arc::default(),
+                    attempts: Default::default(),
+                    pass_at,
+                })
+            };
+            let new_info = |function: Arc<Polling>| {
+                let mut def = TestDef::sample(false, 3, 1);
+                def.function = Some("example:poll".into());
+                def.callback = Some(function);
+                Info::new(1, "example:poll".into(), def, Some((0, 64, 0)), Dim::Overworld, Rotation::None)
+            };
+
+            // Waits to the timeout: asked on tick 0 straight after `run`, once
+            // a tick, then fails on tick 4 with what it said then.
+            let waits = polling(None);
+            let mut info = new_info(waits.clone());
+            attempt(game, &mut info);
+            let Some(TestError::Assert { message, tick: 4 }) = &info.error else {
+                panic!("expected the last reason on tick 4: {:?}", info.error);
+            };
+            assert_eq!(message.plain(), "not yet at 4");
+            // A retry calls `run` again and polls only its own ticker.
+            let mut retry = info.copy_reset(2);
+            attempt(game, &mut retry);
+            assert_eq!(
+                *waits.log.lock().unwrap(),
+                [
+                    "run 0 @0", "tick 0 @0", "tick 0 @1", "tick 0 @2", "tick 0 @3", "tick 0 @4",
+                    "run 1 @0", "tick 1 @0", "tick 1 @1", "tick 1 @2", "tick 1 @3", "tick 1 @4",
+                ]
+            );
+
+            // Passes on tick 2, and is not asked again.
+            let passes = polling(Some(2));
+            let mut info = new_info(passes.clone());
+            attempt(game, &mut info);
+            game.tick_internal(&mut info);
+            assert!(info.done && info.error.is_none());
+            assert_eq!(
+                *passes.log.lock().unwrap(),
+                ["run 0 @0", "tick 0 @0", "tick 0 @1", "tick 0 @2"]
+            );
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn registered_game_tests_report_pass_failure_and_unknown_in_real_level() {

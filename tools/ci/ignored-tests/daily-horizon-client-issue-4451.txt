@@ -670,6 +670,7 @@ horizon-client game::functions::tests::unless_function_keeps_a_fallthrough_after
 horizon-client game::functions::tests::world_open_loads_functions_before_first_tick lib daily resources
 horizon-client game::game_tests::added_test_summary_context_tests::added_issuer_actor_missing_guest_and_restoration_controls lib daily resources
 horizon-client game::game_tests::completed_test_coordinate_feedback_tests::actual_completed_test_retains_player_source_for_coordinate_feedback lib daily resources
+horizon-client game::game_tests::registered_game_test_tests::a_polled_test_is_asked_on_its_start_tick_and_every_tick_after lib daily resources
 horizon-client game::game_tests::registered_game_test_tests::registered_game_tests_report_pass_failure_and_unknown_in_real_level lib daily resources
 horizon-client game::general::save_load_tests::codec_refusal_publishes_nothing_and_poisons_nothing lib daily resources
 horizon-client game::general::save_load_tests::duplicate_uuid_with_a_live_entity_refuses_the_whole_tree lib daily resources

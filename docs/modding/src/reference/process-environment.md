@@ -32,6 +32,12 @@ Game tests are off by default. Turn them on with `--game-tests` on the game's co
 leave them off. With the mode on, a mod may declare content meant only for tests. `register_game_tests` runs on
 every world open whatever the mode, and `/test` is always available.
 
+A test function's `run` is called once per attempt. To check something every tick, as vanilla's
+`succeedWhen` does, it returns `GameTestResult::Poll(ticker)`: the runner calls the ticker on that same tick
+and then every tick until it answers `GameTestTick::Pass` or `Fail`. `Waiting(reason)` means not yet, and a
+timeout fails with the reason given on the timeout tick. `GameTestContext::tick` counts the attempt's ticks
+from 0, the tick `run` is called on. The `register_game_tests` hook's notes give the details.
+
 The switch counts only where an option is expected: `--dedicated --world --game-tests` opens the world named
 `--game-tests` and leaves test mode off. The dedicated server's `--universe`, `--port`, `--serverId` and
 `--pidFile` likewise take the next word as their value.
