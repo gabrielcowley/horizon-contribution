@@ -549,58 +549,6 @@ pub struct NativePlayer {
     pub dimension: &'static str,
 }
 
-/// How the panel lays out a recipe of `native_panel_recipes`.
-#[allow(dead_code)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NativeRecipeLayout {
-    /// A crafting grid of `width` x `height` slots, an arrow and the result.
-    Grid,
-    /// One input over a flame, an arrow and the result (furnaces, smokers,
-    /// campfires).
-    Cooking,
-    /// One input, an arrow and the result (the stonecutter).
-    Single,
-    /// Template, base and addition, an arrow and the result.
-    Smithing,
-    /// A potion and an ingredient, an arrow and the result.
-    Brewing,
-}
-
-/// One result of a recipe the panel shows (`native_panel_recipes`): a slot
-/// cycling through `stacks`, one a second, and the chance in percent the recipe
-/// gives it (`Some(25.0)` draws "25%"); `None` gives it every time.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeRecipeResult {
-    pub(crate) stacks: Vec<mod_api::Stack>,
-    pub(crate) chance: Option<f32>,
-}
-
-/// A recipe the panel shows (`native_panel_recipes`). Each slot, and each
-/// result, cycles through its stacks, one a second; an empty slot shows
-/// nothing. A crafting recipe has one result and no chance.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct NativeRecipeView {
-    pub(crate) layout: NativeRecipeLayout,
-    /// The grid's size (`Grid` only), at most 3 x 3; slots past it continue
-    /// in rows under it, 27 in all.
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) slots: Vec<Vec<mod_api::Stack>>,
-    /// Up to four, left to right after the arrow.
-    pub(crate) results: Vec<NativeRecipeResult>,
-    /// Fluids the recipe takes and gives, `amount` in millibuckets, each in
-    /// a well with its amount under it; at most eight each. A well shows the
-    /// fluid's client look (`data/<mod>/horizon/fluid/`: sprite and tint), a
-    /// flat square of vanilla's colour for water and lava and else grey when
-    /// the fluid has none.
-    pub(crate) fluid_inputs: Vec<FluidStack>,
-    pub(crate) fluid_outputs: Vec<FluidStack>,
-    /// A short line under the recipe (a cooking time), or "".
-    pub(crate) note: String,
-    /// The action button beside it: none, enabled, or shown greyed.
-    pub(crate) action: Option<bool>,
-}
-
 /// An item of [`NativeRecipes::items`], by its index there, with a count
 /// and the components it has beyond the item's own, in vanilla's item
 /// syntax (`[minecraft:potion_contents={potion:"minecraft:swiftness"}]`),
@@ -2285,15 +2233,15 @@ impl Game<'_> {
     /// (each an icon; `tab` is the selected one) between them. At most 256
     /// recipes and 16 tabs; no recipes shows the items again. The same title
     /// and tab again keep the page the player turned to.
-    pub(super) fn native_panel_recipes(
+    pub(in crate::game) fn panel_recipes(
         &mut self,
         mod_id: &str,
         title: &str,
         tabs: Vec<mod_api::Stack>,
         tab: u32,
-        views: Vec<NativeRecipeView>,
+        recipes: Vec<mod_api::RecipeView>,
     ) {
-        let page = RecipePage::new(title, tabs, tab, views);
+        let page = RecipePage::new(title, tabs, tab, recipes);
         self.panel.show_recipes(mod_id, page);
     }
     /// No world is open: a client without a player (the title screen). A

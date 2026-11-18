@@ -86,6 +86,34 @@ pub trait RecipesClientHost {
     #[access(WorldOnly)]
     fn panel_style(&mut self, mod_id: &str, style: PanelStyle);
     /// Side: client.
+    /// Shows these recipes in the panel instead of its items, as many as fit
+    /// a page, under `title` and a back button, with a row of `tabs` (each an
+    /// icon; `tab` is the selected one) between them, laid out with the
+    /// game's own slots, arrows and buttons. At most 256 recipes and 16 tabs;
+    /// each recipe's limits are on `RecipeView`, and what is past them is cut.
+    /// The same title and tab again keep the page the player turned to.
+    /// Clicks on a slot, an action button, a tab, a page turn and the back
+    /// button come back as `panel_event`. Like `panel_items`, it takes the
+    /// panel from the mod that had it; no recipes shows mod `mod_id`'s items
+    /// again, and a mod's empty items with no recipes give the panel up.
+    #[access(WorldOnly)]
+    fn panel_recipes(
+        &mut self,
+        mod_id: &str,
+        title: &str,
+        tabs: Vec<Stack>,
+        tab: u32,
+        recipes: Vec<RecipeView>,
+    );
+    /// Side: client.
+    /// The mod whose panel (`panel_items`, `panel_recipes`) the game shows
+    /// beside container screens: the last mod to show something there that
+    /// has not given it up, and is turned on. None while no mod has it. A mod
+    /// that only shows its pages when nobody else is using the panel asks
+    /// this first.
+    #[access(WorldOnly)]
+    fn panel_owner(&self) -> Option<String>;
+    /// Side: client.
     /// Places a recipe in the open screen's grid as a click in the recipe
     /// book does (`ServerboundPlaceRecipePacket`): the inventory's grid or a
     /// crafting table's. `all` places as many as the items allow, as with

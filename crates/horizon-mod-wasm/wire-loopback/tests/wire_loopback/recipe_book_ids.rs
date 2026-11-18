@@ -1,6 +1,6 @@
 use super::*;
 use mod_api::prelude::RecipesClientHost;
-use mod_api::{PanelStyle, RecipeTransferCheck, Stack};
+use mod_api::{PanelStyle, RecipeTransferCheck, RecipeView, Stack};
 
 struct Client;
 impl mod_api::Host for Client {}
@@ -13,6 +13,12 @@ impl RecipesClientHost for Client {
         unreachable!()
     }
     fn panel_style(&mut self, _: &str, _: PanelStyle) {
+        unreachable!()
+    }
+    fn panel_recipes(&mut self, _: &str, _: &str, _: Vec<Stack>, _: u32, _: Vec<RecipeView>) {
+        unreachable!()
+    }
+    fn panel_owner(&self) -> Option<String> {
         unreachable!()
     }
     fn place_recipe(&mut self, _: i32, _: bool) -> Result<(), String> {

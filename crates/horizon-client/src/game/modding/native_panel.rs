@@ -131,7 +131,7 @@ impl Panel {
             self.native_changed(self.searching && !self.sent.is_empty());
         }
     }
-    /// `native_panel_recipes`.
+    /// `panel_recipes`.
     pub(super) fn show_recipes(&mut self, mod_id: &str, page: Option<RecipePage>) {
         let filtering = mod_id == "recipes" && !self.sent.is_empty();
         if let Some(shown) = self.native_of(mod_id, page.is_some()) {
@@ -325,6 +325,12 @@ impl Game<'_> {
     /// the session, whether or not its panel is showing.
     pub(in crate::game) fn panel_style(&mut self, mod_id: &str, style: PanelStyle) {
         self.panel.set_style(mod_id, style);
+    }
+    /// The mod whose panel shows beside container screens: the last to show
+    /// something there that hasn't given it up, if it is turned on.
+    pub(in crate::game) fn panel_owner(&self) -> Option<String> {
+        self.panel_shown()
+            .map(|shown| shown.owner.native_id().to_owned())
     }
     fn browser_batch(&self) -> Option<HudBatch> {
         let r = self.renderer.as_ref()?;
@@ -972,8 +978,8 @@ pub(super) fn browser_stack(
 #[cfg(test)]
 mod tests {
     use super::{BrowserStack, Owner, Panel, RecipePage};
-    use crate::game::native_hooks::{NativeRecipeLayout, NativeRecipeResult, NativeRecipeView};
     use mod_api::FluidStack;
+    use mod_api::{RecipeLayout, RecipeResult, RecipeView};
 
     fn keys() {
         mod_platform::__private::part_tests::install_parts_fixture(&[]).unwrap();
@@ -1002,14 +1008,14 @@ mod tests {
     fn fluid(id: &str, amount: u32) -> FluidStack {
         FluidStack::new(mod_api::__private::fluid_key(id).unwrap(), amount)
     }
-    fn view() -> NativeRecipeView {
-        NativeRecipeView {
-            layout: NativeRecipeLayout::Grid,
+    fn view() -> RecipeView {
+        RecipeView {
+            layout: RecipeLayout::Grid,
             width: 5,
             height: 1,
             slots: vec![vec![stack("minecraft:oak_log")]; 30],
             results: (0..6)
-                .map(|i| NativeRecipeResult {
+                .map(|i| RecipeResult {
                     stacks: vec![stack("minecraft:oak_planks")],
                     chance: (i == 1).then_some(250.0),
                 })
@@ -1165,6 +1171,27 @@ mod tests {
         assert_eq!((shown.items.len(), shown.recipes.is_none()), (2, true));
         panel.show_items("recipes", Vec::new());
         assert!(panel.shown(|_| true).is_none());
+    }
+
+    /// `panel_owner`: a mod's page holds the panel until another mod shows
+    /// its items, and clearing a page the mod no longer holds changes nothing.
+    #[test]
+    fn another_mods_items_take_the_panel_from_a_recipe_page() {
+        keys();
+        let mut panel = Panel::default();
+        let owner = |panel: &Panel| panel.shown(|_| true).map(|s| s.owner.clone());
+        panel.show_recipes(
+            "mymod",
+            RecipePage::new("Crushing", Vec::new(), 0, vec![view()]),
+        );
+        assert_eq!(owner(&panel), Some(Owner::Native("mymod".into())));
+
+        panel.show_items("viewer", vec![stack("minecraft:stone")]);
+        assert_eq!(owner(&panel), Some(Owner::Native("viewer".into())));
+        assert_eq!(panel.shown(|_| true).unwrap().recipes, None);
+
+        panel.show_recipes("mymod", None);
+        assert_eq!(owner(&panel), Some(Owner::Native("viewer".into())));
     }
 
     #[test]
