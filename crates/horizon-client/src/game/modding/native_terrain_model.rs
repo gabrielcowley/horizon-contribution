@@ -1,12 +1,12 @@
 //! Standalone models under a block entity's pose with the terrain's own materials
 //! (`BlockEntityDrawContext::terrain_model`): explicit solid/cutout/cutout-mipped selection,
-//! directional shading, UV shift and shrink, and tint.
+//! directional shading, UV shift (scrolling on the animation clock) and shrink, and tint.
 use super::{Game, native_block_entity_draw::BlockEntityDraw};
 use horizon_client::{
     models::catalog::BakedFace,
     terrain_model::{
         NativeModelMaterial, NativeModelRenderOptions, NativeModelShade, NativeModelUvShift,
-        draw_model,
+        draw_model_marked,
     },
 };
 use mod_api::{
@@ -77,7 +77,8 @@ fn engine_options(options: TerrainModelOptions<'_>) -> NativeModelRenderOptions<
 }
 
 /// Appends `faces` under `draw`'s pose at `light`, or appends nothing and returns `Refused` when
-/// the renderer refuses the model or `options`.
+/// the renderer refuses the model or `options`. The faces a scrolling shift moves are recorded
+/// as runs that scroll on the animation clock (`BlockEntityDraw::scroll_run`).
 fn draw_terrain_model(
     draw: &mut BlockEntityDraw,
     faces: &[BakedFace],
@@ -85,28 +86,52 @@ fn draw_terrain_model(
     sprite_layer: impl Fn(&str) -> Option<u32>,
     options: TerrainModelOptions<'_>,
 ) -> Result<(), TerrainModelError> {
+    let scroll = options.uv_shift.and_then(|shift| shift.scroll);
+    if scroll.is_some_and(|scroll| !scroll.is_finite()) {
+        return Err(TerrainModelError::Refused);
+    }
     let pose = draw.pose();
     let vertices = draw.vertices_mut();
-    draw_model(
+    // Runs of shifted vertices, as (start, end).
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let drawn = draw_model_marked(
         faces,
         pose,
         light,
         engine_options(options),
         sprite_layer,
-        |vertex| vertices.push(vertex),
-    )
-    .then_some(())
-    .ok_or(TerrainModelError::Refused)
+        |vertex, shifted| {
+            let at = vertices.len();
+            vertices.push(vertex);
+            if scroll.is_some() && shifted {
+                match runs.last_mut() {
+                    Some((_, end)) if *end == at => *end = at + 1,
+                    _ => runs.push((at, at + 1)),
+                }
+            }
+        },
+    );
+    if !drawn {
+        return Err(TerrainModelError::Refused);
+    }
+    if let Some(scroll) = scroll {
+        for (start, end) in runs {
+            draw.scroll_run(start, end, scroll);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::native_block_entity_draw::{Moving, place_turning};
     use super::*;
     use glam::{Mat4, Vec3};
     use horizon_assets::{
         bake::{RenderType, bake_flat_face},
         model::{Direction, Material},
     };
+    use horizon_client::terrain_model::draw_model;
     use horizon_client::{
         block_entity_render::diffuse_lights,
         gfx::{
@@ -115,7 +140,7 @@ mod tests {
         },
         mesher::Vertex,
     };
-    use mod_api::TerrainUvShift;
+    use mod_api::{TerrainUvShift, UvScroll};
 
     /// A full south face of `sprite` (layer 7) in `render_type`, tinted when `tint_index` >= 0.
     fn face(render_type: Option<RenderType>, tint_index: i32) -> BakedFace {
@@ -138,9 +163,47 @@ mod tests {
     fn sprite(name: &str) -> Option<u32> {
         match name {
             "test:casing" => Some(7),
+            "test:frame" => Some(9),
             "test:belt" => Some(11),
             _ => None,
         }
+    }
+
+    /// A full south face of `test:frame` (layer 9), which a shift of `test:casing` leaves be.
+    fn frame_face() -> BakedFace {
+        let mut face = face(None, -1);
+        face.quad.material.sprite = "test:frame".into();
+        face.layer = 9;
+        face
+    }
+
+    /// The draw's frame after `terrain_model` with `options`.
+    fn drawn_frame(
+        faces: &[BakedFace],
+        options: TerrainModelOptions<'_>,
+    ) -> (Result<(), TerrainModelError>, BlockEntityDraw) {
+        let mut draw = BlockEntityDraw::posed(
+            0.0,
+            0,
+            0xF0F0,
+            [0; 3],
+            Mat4::IDENTITY,
+            diffuse_lights(false),
+            Vec::new(),
+        );
+        let result = draw_terrain_model(&mut draw, faces, 0xF0F0, sprite, options);
+        (result, draw)
+    }
+
+    /// Each vertex's UV as `place_turning` puts it at animation time `time`.
+    fn uvs_at(vertices: &[Vertex], moving: &Moving, time: f64) -> Vec<[f32; 2]> {
+        let mut out = Vec::new();
+        place_turning(vertices, moving, time, Vec3::ZERO, &mut out);
+        out.iter().map(|v| v.uv).collect()
+    }
+
+    fn close(a: [f32; 2], b: [f32; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5
     }
 
     /// Full bright, a block east of the camera.
@@ -283,6 +346,118 @@ mod tests {
             let (result, vertices) = drawn(&[face(None, -1)], options);
             assert_eq!(result, Err(TerrainModelError::Refused), "{options:?}");
             assert!(vertices.is_empty(), "{options:?}");
+        }
+    }
+
+    /// A shift with no scroll draws exactly what the renderer's own `draw_model` draws, and
+    /// nothing in the frame moves by itself.
+    #[test]
+    fn a_shift_without_a_scroll_draws_the_same_vertices_and_nothing_moves() {
+        let faces = [face(None, -1), frame_face()];
+        let shift = TerrainUvShift::new("test:casing", "test:belt", [1.0, 0.5], [0.0, 0.25]);
+        let options = TerrainModelOptions::default().with_uv_shift(shift);
+        let mut expected = Vec::new();
+        assert!(draw_model(
+            &faces,
+            Mat4::IDENTITY,
+            0xF0F0,
+            engine_options(options),
+            sprite,
+            |vertex| expected.push(vertex),
+        ));
+        let (result, draw) = drawn_frame(&faces, options);
+        assert_eq!(result, Ok(()));
+        let (vertices, moving) = draw.into_turning();
+        assert_eq!(
+            bytemuck::cast_slice::<Vertex, u8>(&vertices),
+            bytemuck::cast_slice::<Vertex, u8>(&expected)
+        );
+        assert!(moving.is_empty());
+    }
+
+    /// The shifted faces' UVs are `uv * scale + offset + fract(rate * t + phase) * span` at every
+    /// animation time, wrapping at the span; the faces of other sprites never move.
+    #[test]
+    fn a_scrolling_shift_moves_only_its_faces_by_the_sawtooth_on_the_animation_clock() {
+        // A belt's: V only, half the sprite a cycle, the bottom face half a cycle on.
+        let rate = 64.0 / 504.0;
+        let scroll = UvScroll::new([0.0, rate], [0.0, 0.5], [1.0, 0.5]);
+        let shift = TerrainUvShift::new("test:casing", "test:belt", [1.0, 0.5], [0.0, 0.0])
+            .with_scroll(scroll);
+        let faces = [frame_face(), face(None, -1), frame_face()];
+        let (result, draw) =
+            drawn_frame(&faces, TerrainModelOptions::default().with_uv_shift(shift));
+        assert_eq!(result, Ok(()));
+        let (vertices, moving) = draw.into_turning();
+        assert!(!moving.is_empty());
+        let base: Vec<[f32; 2]> = vertices.iter().map(|v| v.uv).collect();
+        for time in [0.0, 1.0, 2.5, 3.9375, 7.875, 1_000.25, 4_000_000_000.5] {
+            let uvs = uvs_at(&vertices, &moving, time);
+            let cycle = rate as f64 * time + 0.5;
+            let expected = ((cycle - cycle.floor()) * 0.5) as f32;
+            for (i, (uv, base)) in uvs.iter().zip(&base).enumerate() {
+                let want = if (4..8).contains(&i) {
+                    [base[0], base[1] + expected]
+                } else {
+                    *base
+                };
+                assert!(close(*uv, want), "t {time} vertex {i}: {uv:?} != {want:?}");
+            }
+        }
+        // It wraps: one whole cycle later every UV is back where it was, and just before the
+        // wrap the scroll is almost the whole span.
+        let period = 504.0 / 64.0;
+        let later = uvs_at(&vertices, &moving, 1.0 + period);
+        for (a, b) in uvs_at(&vertices, &moving, 1.0).iter().zip(&later) {
+            assert!(close(*a, *b), "{a:?} != {b:?}");
+        }
+        let late = uvs_at(&vertices, &moving, period / 2.0 - 1e-4);
+        assert!(late[4][1] - base[4][1] > 0.499, "{:?}", late[4]);
+        let wrapped = uvs_at(&vertices, &moving, period / 2.0);
+        assert!(close(wrapped[4], base[4]), "{:?}", wrapped[4]);
+    }
+
+    /// A mob's frame has no animation clock: its scroll is held at its phase.
+    #[test]
+    fn a_frame_drawn_once_holds_its_scroll_at_its_phase() {
+        let scroll = UvScroll::new([0.25, 0.5], [0.25, 0.5], [0.5, 0.5]);
+        let shift =
+            TerrainUvShift::new("test:casing", "test:belt", [1.0; 2], [0.0; 2]).with_scroll(scroll);
+        let (_, plain) = drawn(
+            &[face(None, -1)],
+            TerrainModelOptions::default().with_uv_shift(TerrainUvShift::new(
+                "test:casing",
+                "test:belt",
+                [1.0; 2],
+                [0.0; 2],
+            )),
+        );
+        let (result, scrolled) = drawn(
+            &[face(None, -1)],
+            TerrainModelOptions::default().with_uv_shift(shift),
+        );
+        assert_eq!(result, Ok(()));
+        for (a, b) in scrolled.iter().zip(&plain) {
+            assert!(close(a.uv, [b.uv[0] + 0.125, b.uv[1] + 0.25]), "{:?}", a.uv);
+        }
+    }
+
+    #[test]
+    fn a_scroll_that_is_not_finite_refuses_the_draw() {
+        for bad in [
+            UvScroll::new([f32::NAN, 0.0], [0.0; 2], [1.0; 2]),
+            UvScroll::new([0.0; 2], [f32::INFINITY, 0.0], [1.0; 2]),
+            UvScroll::new([0.0; 2], [0.0; 2], [1.0, f32::NEG_INFINITY]),
+        ] {
+            let shift = TerrainUvShift::new("test:casing", "test:belt", [1.0; 2], [0.0; 2])
+                .with_scroll(bad);
+            let (result, draw) = drawn_frame(
+                &[face(None, -1)],
+                TerrainModelOptions::default().with_uv_shift(shift),
+            );
+            assert_eq!(result, Err(TerrainModelError::Refused), "{bad:?}");
+            let (vertices, moving) = draw.into_turning();
+            assert!(vertices.is_empty() && moving.is_empty(), "{bad:?}");
         }
     }
 }

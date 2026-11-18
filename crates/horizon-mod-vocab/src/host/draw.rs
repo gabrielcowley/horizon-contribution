@@ -233,7 +233,8 @@ pub trait BlockEntityDrawContext {
     }
     /// Keeps what this call drew, with neither `block_entity_submit` nor
     /// `block_entity_render_bounding_box` called until its state, block entity,
-    /// light or resource packs change. Parts marked with `spin` keep turning on the
+    /// light or resource packs change. Parts marked with `spin` keep turning, and
+    /// UVs shifted with a [`UvScroll`](crate::UvScroll) keep scrolling, on the
     /// animation clock (`animation_time`); other geometry stays as submitted. Do not bake frame-dependent
     /// values into kept vertices: item glint and time-dependent item models stop
     /// where they were, and neighboring blocks do not invalidate the cache.
@@ -249,7 +250,7 @@ pub trait BlockEntityDrawContext {
         unimplemented!("BlockEntityDrawContext::draw_game_time")
     }
     /// The frame on this client's animation clock, in ticks with the partial tick: what
-    /// turns `spin` parts. It counts the ticks this client's level has run (vanilla's
+    /// turns `spin` parts and scrolls a [`UvScroll`](crate::UvScroll). It counts the ticks this client's level has run (vanilla's
     /// `TextureManager.tick` count): pausing and `/tick freeze` hold it, and the server's
     /// time updates never set it back, unlike `game_time`. Each client counts from its
     /// own start, so it means nothing on the server or to another client.
@@ -352,7 +353,8 @@ pub trait BlockEntityDrawContext {
     /// `draw.light` raised by each quad's own emission. `options` picks the material
     /// (each quad's `solid`, `cutout` or `cutout_mipped`, or one for all: cutout discards
     /// under alpha 0.1 without mipmaps, cutout-mipped under 0.5 with them), the directional
-    /// shading (independent of light), one sprite drawn as another with moved UVs, a UV
+    /// shading (independent of light), one sprite drawn as another with moved UVs (scrolling
+    /// on the animation clock with a [`UvScroll`](crate::UvScroll)), a UV
     /// shrink, and a `0xRRGGBB` tint on quads with a tint index. What a machine's belts,
     /// shafts and casings draw with. A refusal draws nothing.
     fn terrain_model(

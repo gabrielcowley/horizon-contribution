@@ -72,13 +72,30 @@ draw.terrain_model(self.belt, options)?;
   `Entity` shades every quad by the level's entity light directions. Full-bright light never
   turns shading off.
 - `uv_shift` draws faces of exactly one sprite with another, their UVs scaled then moved.
+  `TerrainUvShift::with_scroll(UvScroll::new(rate, phase, span))` keeps them moving on the
+  animation clock (below): on each axis the UVs move a further
+  `fract(rate * animation_time + phase) * span` sprite units, a sawtooth that runs from `0` to
+  `span` and jumps back. A kept model goes on scrolling without being drawn again, as a `spin`
+  part goes on turning; a mob's frame holds it at `phase`. Only faces of the shifted sprite move.
   `uv_shrink_ratio` (`0.0..=1.0`, default `0.0`) pulls UVs towards each face's centre first,
   for a model baked with an older `FaceBakery`'s atlas shrink. The engine never guesses it.
 - `tint` (`0xRRGGBB`) multiplies only quads with a tint index.
 - A stale handle returns `TerrainModelError::Model(ModelError)`. If any quad can't be drawn, the result is
   `TerrainModelError::Refused` and nothing is drawn. That covers a translucent quad under
   `Model`, a missing sprite, a pose that flattens the model, a ratio out of range, and a shift
-  whose numbers aren't finite, whose sprites are unknown or whose source sprite no face uses.
+  whose numbers (scroll included) aren't finite, whose sprites are unknown or whose source sprite
+  no face uses.
+
+A belt whose texture runs at its speed, kept until the speed changes:
+
+```rust,ignore
+// Half the sprite a cycle; `speed / 504` cycles a tick, as Create's belts scroll.
+let scroll = UvScroll::new([0.0, speed / 504.0], [0.0, 0.0], [1.0, 0.5]);
+let belt = TerrainUvShift::new("mymod:block/belt", "mymod:block/belt_scroll", [1.0, 0.5], [0.0, 0.0])
+    .with_scroll(scroll);
+draw.terrain_model(self.belt, TerrainModelOptions::default().with_uv_shift(belt))?;
+draw.keep();
+```
 
 ## Persistent groups
 
@@ -207,7 +224,7 @@ return the styled advance rounded up, as vanilla `Font.width` does. Use half tha
 to centre a line. Kept text retains its glyphs, including obfuscated glyph choices,
 until it is drawn again. Resource reload invalidates kept geometry.
 
-Spinning parts use the client's animation clock: level-running texture ticks plus the
+Spinning parts and scrolling UVs use the client's animation clock: level-running texture ticks plus the
 level's partial tick, not the camera's partial tick or the server's day time. Pausing
 holds that clock; `/tick freeze` holds the level partial at 1 and stops texture ticks.
 Camera motion during a freeze does not spin a part backwards. Server time updates do

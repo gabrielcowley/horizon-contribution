@@ -87,6 +87,21 @@ pub fn draw_model(
     sprite: impl Fn(&str) -> Option<u32>,
     mut emit: impl FnMut(Vertex),
 ) -> bool {
+    draw_model_marked(faces, pose, light, options, sprite, |vertex, _| {
+        emit(vertex)
+    })
+}
+
+/// [`draw_model`], telling `emit` whether each vertex is on a face the `uv_shift` moved, so a
+/// caller can move those UVs again later (a scroll on the animation clock).
+pub fn draw_model_marked(
+    faces: &[BakedFace],
+    pose: Mat4,
+    light: u32,
+    options: NativeModelRenderOptions<'_>,
+    sprite: impl Fn(&str) -> Option<u32>,
+    mut emit: impl FnMut(Vertex, bool),
+) -> bool {
     if !pose.is_finite()
         || !options.uv_shrink_ratio.is_finite()
         || !(0.0..=1.0).contains(&options.uv_shrink_ratio)
@@ -125,7 +140,7 @@ pub fn draw_model(
         }
         None => None,
     };
-    let vertices = |face: &BakedFace| -> Option<[Vertex; 4]> {
+    let vertices = |face: &BakedFace| -> Option<([Vertex; 4], bool)> {
         let quad = &face.quad;
         let overlay = overlay(face, options.material)?;
         let mut layer = sprite(&quad.material.sprite)?;
@@ -146,8 +161,10 @@ pub fn draw_model(
                 *p = std::array::from_fn(|i| p[i] + options.uv_shrink_ratio * (center[i] - p[i]));
             }
         }
+        let shifted = shift
+            .is_some_and(|(_, _, shift)| same_sprite(&quad.material.sprite, shift.source_sprite));
         if let Some((_, target, shift)) = shift
-            && same_sprite(&quad.material.sprite, shift.source_sprite)
+            && shifted
         {
             layer = target;
             for p in &mut uv {
@@ -189,7 +206,7 @@ pub fn draw_model(
         if positions.iter().any(|p| !p.is_finite()) || uv.iter().flatten().any(|v| !v.is_finite()) {
             return None;
         }
-        Some(std::array::from_fn(|i| Vertex {
+        let quad = std::array::from_fn(|i| Vertex {
             pos: positions[i].to_array(),
             uv: uv[i],
             layer: overlay | layer << 16,
@@ -197,14 +214,16 @@ pub fn draw_model(
             light,
             normal: normal_bits,
             glint_uv: [normal.x, normal.y],
-        }))
+        });
+        Some((quad, shifted))
     };
     if faces.iter().any(|face| vertices(face).is_none()) {
         return false;
     }
     for face in faces {
-        for vertex in vertices(face).expect("validated immutable model") {
-            emit(vertex);
+        let (quad, shifted) = vertices(face).expect("validated immutable model");
+        for vertex in quad {
+            emit(vertex, shifted);
         }
     }
     true

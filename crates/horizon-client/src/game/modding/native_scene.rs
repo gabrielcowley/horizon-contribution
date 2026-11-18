@@ -179,9 +179,9 @@ impl Game<'_> {
                 // Its text's new glyphs upload with this screen's batch.
                 batch.patches.append(&mut self.text_patches.borrow_mut());
                 let time = draw.animation();
-                let (drawn, spins) = draw.into_turning();
+                let (drawn, moving) = draw.into_turning();
                 let mut placed: Vec<Vertex> = Vec::with_capacity(drawn.len());
-                place_turning(&drawn, &spins, time, at, &mut placed);
+                place_turning(&drawn, &moving, time, at, &mut placed);
                 for q in placed.as_chunks::<4>().0 {
                     let corners = q.each_ref().map(|v| Vec3::from_array(v.pos));
                     let [nx, ny, nz, w] = q[0].normal;

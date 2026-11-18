@@ -1887,7 +1887,10 @@ still go on each event or registrar.
   block is drawn the same again without calling `block_entity_submit` or `block_entity_render_bounding_box`
   until its state, its block entity (what the server sent), its light or the resource packs change, so idle machines cost
   no call into the mod each frame. Keep only geometry that reads none of `partial`, `game_time`, the blocks around it or other state of yours:
-  kept geometry stands still (an enchanted item's glint, a clock or compass drawn with `native_draw_item`).
+  kept geometry stands still (an enchanted item's glint, a clock or compass drawn with `native_draw_item`), except
+  parts drawn under `spin`, which keep turning, and `terrain_model` faces shifted with a `UvScroll`
+  (`TerrainUvShift::with_scroll`), whose UVs keep moving by `fract(rate * animation_time + phase) * span`: a belt's
+  or a flame's texture runs on with no new submit.
 
 - Any command a player types: `player_command(player, name, command, cancel, replies)` is heard before the command is looked at (NeoForge's `CommandEvent`), without its slash, for vanilla's commands, the mods' own and commands the player may not run, once for each command a player sends, on a server. Also each line of a quiet command batch. A mod sets `canceled` to stop it: nothing runs and nothing is answered but the lines it pushes to `replies`, which reach the player as system chat.
 

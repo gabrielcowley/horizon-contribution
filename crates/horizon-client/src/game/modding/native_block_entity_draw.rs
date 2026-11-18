@@ -26,7 +26,7 @@ use horizon_client::{
 use horizon_world::registry::BlockStateId;
 #[cfg(test)]
 use mod_api::prelude::*;
-use mod_api::{Identifier, ModelError, ModelPart, ModelRef};
+use mod_api::{Identifier, ModelError, ModelPart, ModelRef, UvScroll};
 
 /// Atlas-resolved standalone geometry, indexed by model slot and resource generation.
 pub(super) struct StandaloneGeometry {
@@ -229,6 +229,8 @@ pub struct BlockEntityDraw {
     /// Where each turning part starts in `vertices` (`spin`), and where the
     /// parts standing still start again (`still`, none).
     spins: Vec<(usize, Option<Spin>)>,
+    /// The runs of `vertices` whose UVs scroll (`TerrainUvShift::scroll`), in order.
+    scrolls: Vec<ScrollRun>,
     /// World block entities record a prepared copy instead of CPU vertices.
     /// Shader packs, GUI scenes and mobs leave this clear, so the model stays
     /// in the vertex stream those paths and their spans already cover.
@@ -307,18 +309,54 @@ impl Spin {
     }
 }
 
-/// `vertices`, drawn relative to the block, moved to the camera by `origin`
-/// and each part of `spins` (starts relative to `vertices`) turned as it is
-/// at animation time `time`, onto `out`.
+/// A run of a frame's vertices whose UVs scroll on the animation clock
+/// (`TerrainUvShift::scroll`): `start..end`, the faces one `terrain_model` call shifted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ScrollRun {
+    start: usize,
+    end: usize,
+    scroll: UvScroll,
+}
+
+/// What moves by itself in a frame, from the start of its vertices: the
+/// turning parts (`BlockEntityDraw::spin`) and the scrolling UV runs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Moving {
+    spins: Vec<(usize, Option<Spin>)>,
+    scrolls: Vec<ScrollRun>,
+}
+
+impl Moving {
+    /// Nothing moves: the vertices are only moved to the camera.
+    pub(super) fn is_empty(&self) -> bool {
+        self.spins.is_empty() && self.scrolls.is_empty()
+    }
+}
+
+/// Adds each run's scroll at animation time `time` to the UVs of `vertices`.
+fn scroll_uvs(vertices: &mut [Vertex], scrolls: &[ScrollRun], time: f64) {
+    for run in scrolls {
+        let offset = run.scroll.offset_at(time);
+        let end = run.end.min(vertices.len());
+        for v in vertices.get_mut(run.start..end).unwrap_or_default() {
+            v.uv = [v.uv[0] + offset[0], v.uv[1] + offset[1]];
+        }
+    }
+}
+
+/// `vertices`, drawn relative to the block, moved to the camera by `origin`,
+/// each turning part of `moving` (starts relative to `vertices`) turned and
+/// each scrolling run's UVs moved as they are at animation time `time`, onto `out`.
 pub(super) fn place_turning(
     vertices: &[Vertex],
-    spins: &[(usize, Option<Spin>)],
+    moving: &Moving,
     time: f64,
     origin: Vec3,
     out: &mut Vec<Vertex>,
 ) {
+    let first = out.len();
     let mut turn: Option<Mat4> = None;
-    let mut next = spins.iter().peekable();
+    let mut next = moving.spins.iter().peekable();
     for (i, v) in vertices.iter().enumerate() {
         while let Some((start, spin)) = next.next_if(|(start, _)| *start <= i) {
             let _ = start;
@@ -345,6 +383,7 @@ pub(super) fn place_turning(
         v.pos = (Vec3::from_array(v.pos) + origin).to_array();
         out.push(v);
     }
+    scroll_uvs(&mut out[first..], &moving.scrolls, time);
 }
 
 #[allow(dead_code)]
@@ -372,6 +411,7 @@ impl BlockEntityDraw {
             vertices,
             kept: false,
             spins: Vec::new(),
+            scrolls: Vec::new(),
             prepared: false,
             records: Vec::new(),
         }
@@ -428,6 +468,13 @@ impl BlockEntityDraw {
                     *at += count;
                 }
             }
+            // A run is one call's vertices, so it is wholly before or after a copy.
+            for run in &mut self.scrolls {
+                if run.start >= record.at {
+                    run.start += count;
+                    run.end += count;
+                }
+            }
             self.vertices.splice(record.at..record.at, extra);
         }
     }
@@ -459,16 +506,51 @@ impl BlockEntityDraw {
                 }),
         );
     }
-    /// The vertices drawn, with those it was made with first.
+    /// The vertices drawn, with those it was made with first: turning parts
+    /// at rest, and scrolling UVs held at their phase, as in a mob's frame.
     pub(super) fn into_vertices(mut self) -> Vec<Vertex> {
         super::draw_boundary::truncate(&mut self.vertices, super::draw_boundary::MAX_DRAW_VERTICES);
+        scroll_uvs(&mut self.vertices, &self.scrolls, 0.0);
         self.vertices
     }
-    /// The vertices drawn and where its turning parts start in them (`spin`).
-    pub(super) fn into_turning(mut self) -> (Vec<Vertex>, Vec<(usize, Option<Spin>)>) {
+    /// The vertices drawn and what moves in them (`spin`, `TerrainUvShift::scroll`).
+    pub(super) fn into_turning(mut self) -> (Vec<Vertex>, Moving) {
         super::draw_boundary::truncate(&mut self.vertices, super::draw_boundary::MAX_DRAW_VERTICES);
         self.spins.retain(|(at, _)| *at <= self.vertices.len());
-        (self.vertices, self.spins)
+        let len = self.vertices.len();
+        self.scrolls.retain(|run| run.start < len);
+        let moving = Moving {
+            spins: self.spins,
+            scrolls: self.scrolls,
+        };
+        (self.vertices, moving)
+    }
+    /// What moves in the vertices from `start` on, relative to `start`, taken from this frame.
+    fn take_moving(&mut self, start: usize) -> Moving {
+        Moving {
+            spins: self
+                .spins
+                .drain(..)
+                .map(|(at, spin)| (at.saturating_sub(start), spin))
+                .collect(),
+            scrolls: self
+                .scrolls
+                .drain(..)
+                .filter(|run| run.end > start)
+                .map(|run| ScrollRun {
+                    start: run.start.saturating_sub(start),
+                    end: run.end - start,
+                    ..run
+                })
+                .collect(),
+        }
+    }
+    /// The vertices `start..end` scroll by `scroll` on the animation clock
+    /// (`TerrainUvShift::scroll`). Runs come in drawing order.
+    pub(super) fn scroll_run(&mut self, start: usize, end: usize, scroll: UvScroll) {
+        if start < end {
+            self.scrolls.push(ScrollRun { start, end, scroll });
+        }
     }
     /// `PoseStack.pushPose`: `pop` comes back to the pose as it is now.
     fn push(&mut self) {
@@ -507,7 +589,8 @@ impl BlockEntityDraw {
     /// its block entity (what the server sent), its light or the resource
     /// packs change. Call it only when what you drew reads none of
     /// `partial`, `game_time`, the blocks around it or anything else of
-    /// yours, and moves nothing by itself but through `spin`: an idle machine,
+    /// yours, and moves nothing by itself but through `spin` or a scrolling
+    /// `terrain_model` shift (`TerrainUvShift::scroll`): an idle machine,
     /// or a shaft turning at a steady speed, not one whose speed changes from
     /// frame to frame. Kept geometry stands still: an enchanted item's glint, and an
     /// item drawn with `native_draw_item` whose model reads the time (a clock,
@@ -639,8 +722,8 @@ struct KeptEntry {
     used: i64,
     /// Relative to the block's corner.
     vertices: Vec<Vertex>,
-    /// Its turning parts (`BlockEntityDraw::spin`), from the start of `vertices`.
-    spins: Vec<(usize, Option<Spin>)>,
+    /// Its turning parts and scrolling UVs, from the start of `vertices`.
+    moving: Moving,
 }
 
 /// Geometry mods kept (`BlockEntityDraw::keep`), by position. As
@@ -685,7 +768,7 @@ impl KeptGeometry {
         revision: ModRevision,
         bounds: [f32; 6],
         vertices: &[Vertex],
-        spins: Vec<(usize, Option<Spin>)>,
+        moving: Moving,
         now: i64,
     ) {
         let mut kept = self
@@ -702,7 +785,7 @@ impl KeptGeometry {
                 bounds,
                 used: now,
                 vertices: kept,
-                spins,
+                moving,
             },
         );
     }
@@ -780,6 +863,7 @@ impl Game<'_> {
             vertices: std::mem::take(out),
             kept: false,
             spins: Vec::new(),
+            scrolls: Vec::new(),
             prepared: prepared_route(
                 self.pack_ids.is_some(),
                 !self.native_shaders.picked.is_empty(),
@@ -818,7 +902,7 @@ impl Game<'_> {
                 if in_frustum(self.view_frustum.as_ref(), origin, entry.bounds) {
                     let start = draw.vertices.len();
                     self.mark_block_entity(start, state);
-                    if entry.spins.is_empty() {
+                    if entry.moving.is_empty() {
                         draw.vertices.extend(entry.vertices.iter().map(|v| Vertex {
                             pos: (Vec3::from_array(v.pos) + origin).to_array(),
                             ..*v
@@ -826,7 +910,7 @@ impl Game<'_> {
                     } else {
                         place_turning(
                             &entry.vertices,
-                            &entry.spins,
+                            &entry.moving,
                             draw.animation,
                             origin,
                             &mut draw.vertices,
@@ -852,15 +936,12 @@ impl Game<'_> {
             draw.light = light;
             draw.kept = false;
             draw.spins.clear();
+            draw.scrolls.clear();
             draw.records.clear();
             self.api_block_entity_submit(pos, block, id, entity, &mut draw);
             self.finish_prepared_draw(&mut draw, corner, camera);
-            // The turning parts, from the start of this block's vertices.
-            let spins: Vec<(usize, Option<Spin>)> = draw
-                .spins
-                .drain(..)
-                .map(|(at, spin)| (at.saturating_sub(start), spin))
-                .collect();
+            // What moves, from the start of this block's vertices.
+            let moving = draw.take_moving(start);
             if draw.kept {
                 kept.keep(
                     pos,
@@ -868,19 +949,19 @@ impl Game<'_> {
                     entity.revision(),
                     bounds,
                     &draw.vertices[start..],
-                    spins.clone(),
+                    moving.clone(),
                     now,
                 );
             } else {
                 kept.forget(pos);
             }
-            if spins.is_empty() {
+            if moving.is_empty() {
                 for v in &mut draw.vertices[start..] {
                     v.pos = (Vec3::from_array(v.pos) + origin).to_array();
                 }
             } else {
                 let drawn = draw.vertices.split_off(start);
-                place_turning(&drawn, &spins, draw.animation, origin, &mut draw.vertices);
+                place_turning(&drawn, &moving, draw.animation, origin, &mut draw.vertices);
             }
         }
         *out = draw.vertices;
@@ -1390,8 +1471,17 @@ mod tests {
             vertices: Vec::new(),
             kept: false,
             spins: Vec::new(),
+            scrolls: Vec::new(),
             prepared: false,
             records: Vec::new(),
+        }
+    }
+
+    /// The frame's turning parts, nothing scrolling.
+    fn spinning(draw: &BlockEntityDraw) -> Moving {
+        Moving {
+            spins: draw.spins.clone(),
+            ..Moving::default()
         }
     }
 
@@ -1431,7 +1521,7 @@ mod tests {
                 .all(|v| v.normal == [0, 127, 0, 127] && v.color == shaded(tint, 1.0))
         );
         let mut out = Vec::new();
-        place_turning(&draw.vertices, &draw.spins, 1.0, Vec3::ZERO, &mut out);
+        place_turning(&draw.vertices, &spinning(&draw), 1.0, Vec3::ZERO, &mut out);
         assert!(out[..4].iter().all(|v| v.normal == [0; 4]));
         assert!(out[4..].iter().all(|v| v.normal == [0, 0, 127, 127]));
     }
@@ -2923,7 +3013,7 @@ mod tests {
         let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-4);
         // A tick and a half: 135 degrees.
         let mut out = Vec::new();
-        place_turning(&draw.vertices, &draw.spins, 1.5, origin, &mut out);
+        place_turning(&draw.vertices, &spinning(&draw), 1.5, origin, &mut out);
         assert!(close(out[0].pos, [11.0, 0.5, 0.5]), "{:?}", out[0].pos);
         let h = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
         assert!(
@@ -2934,7 +3024,7 @@ mod tests {
         assert!(close(out[2].pos, [10.0, 0.0, 0.0]), "{:?}", out[2].pos);
         // One tick: a quarter turn, +x to -z, the normal along.
         out.clear();
-        place_turning(&draw.vertices, &draw.spins, 1.0, origin, &mut out);
+        place_turning(&draw.vertices, &spinning(&draw), 1.0, origin, &mut out);
         assert!(close(out[1].pos, [10.5, 0.5, 0.0]), "{:?}", out[1].pos);
         assert_eq!(out[1].normal, [0, 0, -127, 127]);
         // Four ticks: all the way round, and a long session's late clock is no
@@ -2942,7 +3032,7 @@ mod tests {
         out.clear();
         place_turning(
             &draw.vertices,
-            &draw.spins,
+            &spinning(&draw),
             4_000_000_000.0,
             origin,
             &mut out,
@@ -2968,7 +3058,7 @@ mod tests {
             drawn,
             DEFAULT_BOUNDS,
             &[vertex(0.5)],
-            Vec::new(),
+            Moving::default(),
             0,
         );
         let entry = kept.get(pos, KEY, entity.revision(), 1).expect("kept");
@@ -3010,7 +3100,7 @@ mod tests {
             entity.revision(),
             DEFAULT_BOUNDS,
             &[vertex(0.25)],
-            Vec::new(),
+            Moving::default(),
             2,
         );
         assert!(kept.get(pos, KEY, drawn, 2).is_none());
@@ -3023,13 +3113,110 @@ mod tests {
         assert!(kept.get(pos, KEY, entity.revision(), 3).is_none());
     }
 
+    /// A kept model's scrolling runs are kept with it: drawn once, its UVs go on moving with
+    /// the animation clock frame after frame with no new submit, and the vertices before and
+    /// after a run stay put.
+    #[test]
+    fn kept_scrolling_uvs_go_on_moving_without_a_new_submit() {
+        let mut draw = draw();
+        let uv = |u: f32, v: f32| Vertex {
+            uv: [u, v],
+            ..bytemuck::Zeroable::zeroed()
+        };
+        draw.vertices.push(uv(0.0, 0.0));
+        draw.vertices
+            .extend([uv(0.0, 0.0), uv(1.0, 0.25), uv(1.0, 0.75)]);
+        draw.vertices.push(uv(0.5, 0.5));
+        let scroll = UvScroll::new([0.5, -0.25], [0.0, 0.5], [0.5, 0.25]);
+        draw.scroll_run(1, 4, scroll);
+        draw.keep();
+        let moving = draw.take_moving(0);
+        let mut kept = KeptGeometry::default();
+        let pos = [0, 0, 0];
+        let revision = machine();
+        kept.keep(
+            pos,
+            KEY,
+            revision,
+            DEFAULT_BOUNDS,
+            &draw.vertices,
+            moving,
+            0,
+        );
+        let frame = |kept: &mut KeptGeometry, time: f64| {
+            let entry = kept.get(pos, KEY, revision, 0).expect("kept");
+            let mut out = Vec::new();
+            place_turning(&entry.vertices, &entry.moving, time, Vec3::ZERO, &mut out);
+            out.iter().map(|v| v.uv).collect::<Vec<_>>()
+        };
+        for time in [0.0, 0.5, 1.0, 3.25, 10.0] {
+            let at = scroll.offset_at(time);
+            let uvs = frame(&mut kept, time);
+            assert_eq!(uvs[0], [0.0, 0.0]);
+            assert_eq!(uvs[4], [0.5, 0.5]);
+            for (got, base) in uvs[1..4].iter().zip([[0.0, 0.0], [1.0, 0.25], [1.0, 0.75]]) {
+                assert_eq!(*got, [base[0] + at[0], base[1] + at[1]], "t {time}");
+            }
+        }
+        assert_ne!(frame(&mut kept, 0.5), frame(&mut kept, 1.0));
+    }
+
+    /// A prepared copy baked into the frame ahead of a scrolling run moves the run with it.
+    #[test]
+    fn a_scrolling_run_after_a_baked_copy_moves_with_the_copy() {
+        let mut draw = draw();
+        draw.records.push(PreparedRecord {
+            at: 0,
+            slot: 0,
+            generation: 0,
+            pose: Mat4::IDENTITY,
+            tint: u32::MAX,
+            light: 0,
+        });
+        draw.vertices
+            .extend([<Vertex as bytemuck::Zeroable>::zeroed(); 4]);
+        draw.scroll_run(0, 4, UvScroll::new([1.0; 2], [0.0; 2], [1.0; 2]));
+        let quad = bake_flat_face(
+            [0.0; 3],
+            [16.0; 3],
+            [0.0, 0.0, 16.0, 16.0],
+            Direction::Up,
+            Material {
+                sprite: String::new(),
+                force_translucent: false,
+            },
+            -1,
+        )
+        .unwrap();
+        let face = super::super::minecarts::PreparedModelFace::new(&quad, sprite());
+        draw.bake_recorded(&[Some(vec![face])]);
+        assert_eq!(draw.vertices.len(), 8);
+        assert_eq!((draw.scrolls[0].start, draw.scrolls[0].end), (4, 8));
+    }
+
     #[test]
     fn kept_geometry_out_of_view_for_its_ticks_is_swept() {
         let mut kept = KeptGeometry::default();
         let (seen, gone) = ([0, 0, 0], [5, 0, 0]);
         let m = machine();
-        kept.keep(seen, KEY, m, DEFAULT_BOUNDS, &[vertex(0.0)], Vec::new(), 0);
-        kept.keep(gone, KEY, m, DEFAULT_BOUNDS, &[vertex(0.0)], Vec::new(), 0);
+        kept.keep(
+            seen,
+            KEY,
+            m,
+            DEFAULT_BOUNDS,
+            &[vertex(0.0)],
+            Moving::default(),
+            0,
+        );
+        kept.keep(
+            gone,
+            KEY,
+            m,
+            DEFAULT_BOUNDS,
+            &[vertex(0.0)],
+            Moving::default(),
+            0,
+        );
         kept.get(gone, KEY, m, 50);
         // A sweep at 100 keeps both: each was drawn in the last 100 ticks.
         kept.sweep(100);
