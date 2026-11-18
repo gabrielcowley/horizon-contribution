@@ -207,6 +207,26 @@ treated as a process-index change. In particular, `read_ticks` uses
 and name changes: refusal leaves the original save untouched. Add no alias,
 fallback parser or automatic remapping.
 
+## Amendment: entity rules, light and gas on today's declaration
+
+Today's `WorldFluid` and `FluidLook` carry the fields below, with the names this note's `Fluid`
+should take over unchanged when it lands:
+
+- World mode gains `immersion`: `can_swim`, `can_push_entity` with `motion_scale`, `can_drown`,
+  `can_extinguish`, `fall_distance_modifier` and `supports_boating`, NeoForge's `FluidType`
+  properties of the same names, as static data. Without it a mod fluid stays inert to entities,
+  as today. Each field left out takes NeoForge's default, measured on NeoForge 21.1.259: swim,
+  push and drown true, `motion_scale` 0.014, extinguish false, `fall_distance_modifier` 0.5,
+  boating false. `motion_scale` and `fall_distance_modifier` are finite and 0 or more, refused
+  otherwise.
+- World mode gains `map_color`, its block's `MapColor` id (0 to 61), water's when unset.
+- `light_level` (0 to 15) moves from world mode to the shared part, beside `lighter_than_air`
+  (a gas, drawn and filled from the top of what holds it): a tank-only fluid has them too.
+  `FluidStates::type_properties` answers both on either side.
+- Viscosity stays metadata only. A trace of a NeoForge 1.21.1 server running a mod fluid with
+  viscosity 2000 and density 1400 moved a zombie and a dropped item through it exactly as
+  through water, tick for tick: neither number touches entity motion.
+
 ## Open questions
 
 - What does viscosity promise beyond metadata? Recommend refusing motion support
