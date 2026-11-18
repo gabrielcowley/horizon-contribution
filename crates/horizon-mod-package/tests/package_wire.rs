@@ -9,6 +9,6 @@ fn package_wire_layout_identity() {
         assert_eq!(facade, expected);
         assert_eq!(facade, <T as mod_vocab::wire::Wire>::layout(&mut vec![]));
     }
-    same::<WorldFluid>(3141788496271527564);
-    same::<FluidLook>(11310991335631905293);
+    same::<WorldFluid>(83115759176581819);
+    same::<FluidLook>(7228930133907513251);
 }
