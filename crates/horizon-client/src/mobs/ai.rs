@@ -100,6 +100,8 @@ mod inside_walk_tests {
             bounce_listens: |_| false,
             fall_on: |_, _, _, _, _, _| {},
             bounce_on: |_, _, _, _, _| {},
+            after_fall_on_listens: |_| false,
+            after_fall_on: |_, _, _, _| {},
             // The production binding's own shape: the whole callback staged,
             // a panic contained with it.
             inside_fire: |_level,
@@ -110,7 +112,8 @@ mod inside_walk_tests {
                           at,
                           _precise,
                           staged,
-                          _writes| {
+                          _writes,
+                          _actions| {
                 let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     fire_like_a_part(at, staged);
                 }));
@@ -1540,6 +1543,9 @@ impl crate::block_contact::InsideWalk for MobInside<'_, '_, '_> {
                 precise,
                 &mut staged,
                 &mut writes,
+                // Contact actions are called for dropped items so far: this kind's are
+                // dropped, as the hook documents.
+                &mut Vec::new(),
             );
             effects.absorb_step(staged);
             crate::block_contact::inside_written(state, at, writes);

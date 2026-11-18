@@ -480,7 +480,8 @@ pub(super) fn emit<'a>(
                 rollback.push((name.clone(), false));
             } else if matches!(&field_ty, Type::Reference(reference) if reference.mutability.is_some())
             {
-                if hook.isolate && !rollback_pointee_is_copy(&field_ty) {
+                // An isolated Part hook leaves the rollback to the game's transaction.
+                if hook.isolate && hook.scope.is_none() && !rollback_pointee_is_copy(&field_ty) {
                     return Err(format!(
                         "{}: isolate rolls a listener's writes back to the requested values; \
                          its mutable argument {name} must be a Copy primitive or a fixed array \
@@ -974,10 +975,20 @@ pub(super) fn emit<'a>(
                         format!("super::parts(HookId::{hook_id}, \"{name}\")")
                     }
                 ),
-                format!(
-                    "for {part_item} in super::entered_parts({part_list}, \"{name}\") {{ {} }}",
-                    call(&part_item, "break"),
-                ),
+                if hook.isolate {
+                    // An isolated Part listen hook: a poisoned mod's part is skipped, and a part
+                    // that unwinds poisons its mod for this hook and lets the unwind go on to the
+                    // game, which rolls back what the callback wrote.
+                    format!(
+                        "for (__part_mod, {part_item}) in super::runtime::entered_parts_with_id({part_list}, \"{name}\") {{ if super::runtime::poisoned(HookId::{hook_id}, __part_mod) {{ continue; }} if let Err(__unwound) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {{ {} }})) {{ super::runtime::poison(HookId::{hook_id}, __part_mod); std::panic::resume_unwind(__unwound); }} }}",
+                        call(&part_item, "return"),
+                    )
+                } else {
+                    format!(
+                        "for {part_item} in super::entered_parts({part_list}, \"{name}\") {{ {} }}",
+                        call(&part_item, "break"),
+                    )
+                },
             ),
         };
         let write_back = if name == "block_entity_tick" {

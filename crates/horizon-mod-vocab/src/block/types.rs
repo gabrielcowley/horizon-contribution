@@ -479,4 +479,17 @@ impl EntityInsideEvent<'_> {
     pub fn request(&mut self, write: InsideWrite) {
         self.writes.push(write);
     }
+    /// Queue a contact action: the part's `contact_action` is called with it, and the
+    /// server write host, inside the swept entity's own tick, after its planned writes.
+    pub fn queue(&mut self, action: ContactAction) {
+        self.actions.push(action);
+    }
+}
+
+impl EntityAfterFallOnEvent<'_> {
+    /// Queue a contact action: the part's `contact_action` is called with it, and the
+    /// server write host, inside the swept entity's own tick.
+    pub fn queue(&mut self, action: ContactAction) {
+        self.actions.push(action);
+    }
 }

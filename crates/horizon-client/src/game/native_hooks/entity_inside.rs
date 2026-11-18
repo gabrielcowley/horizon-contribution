@@ -630,7 +630,7 @@ mod sweep_tests {
                 let mut item = item_at_blocks(game);
                 let before = item.velocity.x;
                 horizon_client::block_contact::in_level(Some("minecraft:overworld"), || {
-                    game.sweep_item_inside(&mut item);
+                    game.sweep_item_inside(&mut item, &mut Vec::new());
                 });
                 assert_eq!(
                     *part.contacts.lock().unwrap(),
@@ -662,7 +662,7 @@ mod sweep_tests {
                 let mut item = item_at_blocks(game);
                 let before = item.velocity.x;
                 horizon_client::block_contact::in_level(Some("minecraft:overworld"), || {
-                    game.sweep_item_inside(&mut item);
+                    game.sweep_item_inside(&mut item, &mut Vec::new());
                 });
                 assert_eq!(part.contacts.lock().unwrap().len(), 2);
                 assert!(item.health <= 0, "the killing write applied");
@@ -694,7 +694,7 @@ mod sweep_tests {
                 let mut items = game.dropped.lift();
                 let before = items[0].velocity.x;
                 horizon_client::block_contact::in_level(Some("minecraft:overworld"), || {
-                    game.sweep_item_inside(&mut items[0]);
+                    game.sweep_item_inside(&mut items[0], &mut Vec::new());
                 });
                 game.put_back_dropped(items);
                 assert_eq!(
@@ -728,7 +728,7 @@ mod sweep_tests {
             let mut item = item_at_blocks(game);
             let before = (item.velocity.x, item.health, item.fire_ticks);
             horizon_client::block_contact::in_level(Some("minecraft:overworld"), || {
-                game.sweep_item_inside(&mut item);
+                game.sweep_item_inside(&mut item, &mut Vec::new());
             });
             assert_eq!(
                 (item.velocity.x, item.health, item.fire_ticks),

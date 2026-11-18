@@ -336,6 +336,30 @@ pub(crate) fn entered_parts<'a, P: ?Sized>(
         })
 }
 
+/// [`entered_parts`] with each part's mod id, for an isolated Part hook: the dispatch skips a
+/// mod the hook has poisoned and poisons one whose part unwinds.
+pub(crate) fn entered_parts_with_id<'a, P: ?Sized>(
+    parts: &'a [Attached<P>],
+    hook: &'static str,
+) -> impl Iterator<Item = (&'static str, &'a P)> {
+    let mut guard = crate::dispatch_scope::ModGuard::empty();
+    let scope = crate::dispatch_scope::snapshot();
+    parts
+        .iter()
+        .filter(|attached| mod_index_on(attached.mod_index))
+        .map(move |attached| {
+            scope.replace(
+                &mut guard,
+                crate::content::crash::ModCall {
+                    id: attached.mod_id,
+                    hook,
+                    part: Some(attached.type_name),
+                },
+            );
+            (attached.mod_id, &*attached.part)
+        })
+}
+
 pub(crate) struct Entered<'a> {
     pub(crate) mods: std::slice::Iter<'a, ModEntry>,
     pub(crate) hook: &'static str,

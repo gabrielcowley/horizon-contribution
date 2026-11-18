@@ -217,7 +217,43 @@ pub struct Hooks {
         bool,
         &mut mod_api::InsideEffects,
         &mut Vec<InsideWrite>,
+        &mut Vec<mod_api::ContactAction>,
     ),
+    /// `Block.updateEntityAfterFallOn` told mid-move: the part's own contact actions,
+    /// queued for the entity's own tick.
+    pub after_fall_on_listens: fn(BlockStateId) -> bool,
+    pub after_fall_on:
+        fn(&str, &mut DamageLevel<'_>, Contact<'_>, &mut Vec<mod_api::ContactAction>),
+}
+
+/// A contact action a part queued mid-move, kept for the swept entity's own tick, where
+/// the game calls it back with the server write host if the block is still `state`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QueuedAction {
+    pub moment: mod_api::ContactMoment,
+    pub state: BlockStateId,
+    pub position: BlockPos,
+    pub action: mod_api::ContactAction,
+}
+
+/// Queue the contact actions one callback asked for at `position`, in order, for the
+/// entity `entity`'s own tick to call. A callback whose batch holds an invalid action
+/// (over [`mod_api::ContactAction::MAX_BYTES`]) queues none of them.
+pub fn queue_actions(
+    into: &mut Vec<QueuedAction>,
+    moment: mod_api::ContactMoment,
+    state: BlockStateId,
+    position: BlockPos,
+    actions: Vec<mod_api::ContactAction>,
+) {
+    if actions.iter().all(mod_api::ContactAction::is_valid) {
+        into.extend(actions.into_iter().map(|action| QueuedAction {
+            moment,
+            state,
+            position,
+            action,
+        }));
+    }
 }
 
 pub static HOOKS: OnceLock<Hooks> = OnceLock::new();

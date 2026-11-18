@@ -364,10 +364,13 @@ impl Hook {
         // Isolation is the cancel loop's own: a listener that unwinds rolls the outputs back
         // to the requested ones and is skipped for the hook for the session (arismoko/horizon#2414 ruling).
         let isolate = api.isolate.unwrap_or(false);
-        if isolate && (api.contract != Contract::Cancel || scope.is_some()) {
+        // A Part listen hook may be isolated too: a part that unwinds is skipped by the hook for
+        // the session, and the unwind carries on to the game, which rolls its writes back.
+        let isolated_listen = api.contract == Contract::Listen && scope.is_some();
+        if isolate && !isolated_listen && (api.contract != Contract::Cancel || scope.is_some()) {
             return Err(CatalogError::InvalidHook {
                 hook: name.clone(),
-                error: "isolate is for a global cancel hook".into(),
+                error: "isolate is for a global cancel hook or a Part listen hook".into(),
             });
         }
         let counterparts = Counterparts {

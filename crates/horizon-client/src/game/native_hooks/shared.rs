@@ -1553,7 +1553,16 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
         bounce_listens: |state| {
             crate::game::api_values::block_state::block_listens(mod_api::HookId::BounceOn, state)
         },
-        inside_fire: |level, dimension, entity, kind, state, pos, precise, staged, writes| {
+        inside_fire: |level,
+                      dimension,
+                      entity,
+                      kind,
+                      state,
+                      pos,
+                      precise,
+                      staged,
+                      writes,
+                      actions| {
             // The whole callback is staged: a panic is contained and the walk
             // keeps the caller's collector and write list as they were (arismoko/horizon#2247's
             // rule: a mod's panic never breaks the model).
@@ -1568,6 +1577,7 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
                         precise,
                         effects: staged,
                         writes,
+                        actions,
                     },
                 );
             }));
@@ -1577,6 +1587,32 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
                 } else if let Some(text) = payload.downcast_ref::<String>() {
                     eprintln!("an entity_inside part panicked at {text:?}");
                 }
+            }
+        },
+        after_fall_on_listens: |state| {
+            crate::game::api_values::block_state::block_listens(
+                mod_api::HookId::EntityAfterFallOn,
+                state,
+            )
+        },
+        after_fall_on: |dimension, level, c, actions| {
+            // Staged as the inside contact is: a panic is contained and queues nothing.
+            let mut staged = Vec::new();
+            let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                HitLevel(level.reborrow()).native_entity_after_fall_on(
+                    crate::game::native_hooks::fire::EntityAfterFallOnCall {
+                        dimension,
+                        entity: c.entity,
+                        kind: c.kind,
+                        state: c.state,
+                        pos: c.position,
+                        actions: &mut staged,
+                    },
+                );
+            }));
+            match fired {
+                Ok(()) => actions.append(&mut staged),
+                Err(_) => eprintln!("an entity_after_fall_on part panicked"),
             }
         },
         fall_on: |dimension, level, c, distance, damage, writes| {

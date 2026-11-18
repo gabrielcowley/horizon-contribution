@@ -1702,6 +1702,9 @@ impl MotionWorld<'_, '_, '_> {
                 precise,
                 &mut staged,
                 &mut writes,
+                // Contact actions are called for dropped items so far: this kind's are
+                // dropped, as the hook documents.
+                &mut Vec::new(),
             );
             effects.absorb_step(staged);
             crate::block_contact::inside_written(state, p, writes);

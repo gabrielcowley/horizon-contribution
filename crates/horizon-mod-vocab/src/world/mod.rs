@@ -11,6 +11,7 @@ pub(crate) mod biome_source;
 pub(crate) mod chunk_generator;
 pub(crate) mod chunk_refusal;
 pub(crate) mod clock_adjustment;
+pub(crate) mod contact_action;
 pub(crate) mod criteria;
 pub(crate) mod custom_spawners;
 pub(crate) mod data_maps;
