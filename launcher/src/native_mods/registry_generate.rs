@@ -78,12 +78,18 @@ pub(super) fn stage(bundle: &Bundle, output: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Validates and removes the SDK dependencies of the crate at `relative` inside the mod (the root
+/// crate's or a local crate's: each names the mod's one SDK copy from its own folder), queues its
+/// local path dependencies in `todo`, and returns the SDK packages it named, each with the name
+/// its code calls it by (`mod_api`, or a renamed dependency's key). The build supplies those as
+/// compiled SDK libraries instead. The per-mod internals facade is the root crate's alone.
 pub(super) fn rewrite_dependencies(
     bundle: &Bundle,
     relative: &Path,
     table: &mut toml::Table,
     todo: &mut Vec<PathBuf>,
-) -> Result<(), String> {
+) -> Result<Vec<(String, &'static str)>, String> {
+    let mut named = Vec::new();
     for kind in [
         "dependencies",
         "dev-dependencies",
@@ -98,8 +104,21 @@ pub(super) fn rewrite_dependencies(
         for (key, dep) in deps.iter_mut() {
             let get = |field| dep.get(field).and_then(toml::Value::as_str);
             let package = get("package").unwrap_or(key);
-            if let Some(&(name, _)) = api::PACKAGES.iter().find(|(name, _)| *name == package) {
-                api::sdk_source(key, name, dep)?;
+            if let Some(&(name, library)) = api::PACKAGES.iter().find(|(name, _)| *name == package)
+            {
+                api::sdk_source_at(relative, key, name, dep)?;
+                if name == api::INTERNALS_PACKAGE && !relative.as_os_str().is_empty() {
+                    return Err(format!(
+                        "{key}: {name} belongs in the mod's root crate, not the local crate {}",
+                        relative.display()
+                    ));
+                }
+                let alias = if key == name {
+                    library.to_owned()
+                } else {
+                    key.replace('-', "_")
+                };
+                named.push((alias, library));
                 sdk.push(key.clone());
                 continue;
             }
@@ -126,7 +145,7 @@ pub(super) fn rewrite_dependencies(
             deps.remove(&key);
         }
     }
-    Ok(())
+    Ok(named)
 }
 
 pub(super) fn generate(bundle: &Bundle, update: bool) -> Result<(), String> {
@@ -262,5 +281,76 @@ mod tests {
         assert!(stage(&bundle, output.path())
             .unwrap_err()
             .contains("outside the mod"));
+    }
+    #[test]
+    fn local_crates_name_the_sdk_from_their_own_folder() {
+        let input = tempfile::tempdir().unwrap();
+        let bundle = fixture(input.path());
+        let original = fs::read_to_string(input.path().join("Cargo.toml")).unwrap();
+        fs::write(
+            input.path().join("Cargo.toml"),
+            format!("{original}helper={{path='src/crates/helper'}}\n"),
+        )
+        .unwrap();
+        let helper = input.path().join("src/crates/helper");
+        fs::create_dir_all(&helper).unwrap();
+        let write_helper = |dependencies: &str| {
+            fs::write(
+                helper.join("Cargo.toml"),
+                format!(
+                    "[package]\nname='helper'\nversion='0.1.0'\n[dependencies]\n{dependencies}\n"
+                ),
+            )
+            .unwrap();
+        };
+        let rewrite = |relative: &str| {
+            let path = input.path().join(relative).join("Cargo.toml");
+            let mut manifest: toml::Table = fs::read_to_string(path).unwrap().parse().unwrap();
+            let mut todo = Vec::new();
+            let named =
+                rewrite_dependencies(&bundle, Path::new(relative), &mut manifest, &mut todo);
+            (named, manifest, todo)
+        };
+
+        // The SDK three folders up, under its own name and renamed: both are taken out of the
+        // manifest and named for the build, which supplies them as SDK libraries.
+        write_helper(
+            "horizon-mod-api={path='../../../.horizon/sdk/api/crates/horizon-mod-api'}\n\
+             points={package='horizon-mod-points',path='../../../.horizon/sdk/api/crates/horizon-mod-points'}\n\
+             itoa='1'",
+        );
+        let (named, manifest, _) = rewrite("src/crates/helper");
+        assert_eq!(
+            named.unwrap(),
+            [
+                ("mod_api".to_owned(), "mod_api"),
+                ("points".to_owned(), "mod_points")
+            ]
+        );
+        let dependencies = manifest["dependencies"].as_table().unwrap();
+        assert_eq!(dependencies.keys().collect::<Vec<_>>(), ["itoa"]);
+        let output = tempfile::tempdir().unwrap();
+        stage(&bundle, output.path()).unwrap();
+        assert!(output.path().join("src/crates/helper/inert.rs").is_file());
+
+        // The root crate's form, read from the local crate's folder, names no SDK.
+        write_helper("horizon-mod-api={path='.horizon/sdk/api/crates/horizon-mod-api'}");
+        let error = rewrite("src/crates/helper").0.unwrap_err();
+        assert!(
+            error.starts_with("E_SDK_SOURCE: horizon-mod-api: the path must be \"../../../.horizon/sdk/api/crates/horizon-mod-api\""),
+            "{error}"
+        );
+
+        // The internals facade is generated for the mod's crate only.
+        write_helper(
+            "horizon-internals={path='../../../.horizon/sdk/api/crates/horizon-internals'}",
+        );
+        let error = rewrite("src/crates/helper").0.unwrap_err();
+        assert!(error.contains("belongs in the mod's root crate"), "{error}");
+
+        // The root crate still names its SDK from the mod's folder, and queues its local crates.
+        let (named, _, todo) = rewrite("");
+        assert_eq!(named.unwrap(), [("mod_api".to_owned(), "mod_api")]);
+        assert_eq!(todo, [PathBuf::from("src/crates/helper")]);
     }
 }
