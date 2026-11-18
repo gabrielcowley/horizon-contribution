@@ -165,6 +165,8 @@ fn use_jar_take_records_checked_prefixes_and_refuses_one_matching_nothing() {
             .unwrap();
         zip.write_all(text.as_bytes()).unwrap();
     }
+    zip.add_directory("assets/empty/", zip::write::SimpleFileOptions::default())
+        .unwrap();
     zip.finish().unwrap();
     let use_jar = |take: &[&str]| {
         let mut command = Command::new(binary);
@@ -180,6 +182,7 @@ fn use_jar_take_records_checked_prefixes_and_refuses_one_matching_nothing() {
             &["assets/original_mod", "assets/nothing_here"][..],
             "matches no file",
         ),
+        (&["assets/empty"], "matches no file"),
         (&["assets/original_mod/"], "plain path prefix"),
         (&["META-INF"], "must start with assets/"),
     ] {

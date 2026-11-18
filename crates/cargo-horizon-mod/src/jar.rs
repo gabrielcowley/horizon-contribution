@@ -106,9 +106,12 @@ fn jar_names(path: &Path) -> Result<Vec<String>, String> {
     let error = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
     let file = fs::File::open(path).map_err(|e| error(&e))?;
     let archive = zip::ZipArchive::new(file).map_err(|e| error(&e))?;
-    archive
+    let mut names = archive
         .file_names()
         .map(|name| name.map(|name| name.into_owned()))
-        .collect::<Result<_, _>>()
-        .map_err(|e| error(&e))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| error(&e))?;
+    // A directory entry holds nothing, so a take that matches only one keeps nothing.
+    names.retain(|name| !name.ends_with('/'));
+    Ok(names)
 }
