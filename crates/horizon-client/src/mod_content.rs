@@ -3309,7 +3309,12 @@ const JAR_INPUTS: &str = "horizon-mod-jar-inputs.json";
 
 /// Check the accepted inputs of a composed resource root before server reload.
 /// This reads no candidate packages and never reopens or rehashes an archive.
-pub fn check_jars(root: &Path, jar_store: &Path) -> std::result::Result<(), JarInputsError> {
+/// A run of `side` checks only the jars it needs: a server's never names a client-only jar.
+pub fn check_jars(
+    root: &Path,
+    jar_store: &Path,
+    side: horizon_mod_package::manifest::Side,
+) -> std::result::Result<(), JarInputsError> {
     let marker = root.join(MARKER);
     if !marker.try_exists().map_err(|source| JarInputsError::Io {
         path: marker,
@@ -3322,9 +3327,10 @@ pub fn check_jars(root: &Path, jar_store: &Path) -> std::result::Result<(), JarI
         path: path.clone(),
         source,
     })?;
-    let requirements: Vec<horizon_mod_package::manifest::JarRequirement> =
+    let mut requirements: Vec<horizon_mod_package::manifest::JarRequirement> =
         serde_json::from_slice(&bytes)
             .map_err(|source| JarInputsError::Invalid { path, source })?;
+    requirements.retain(|requirement| requirement.needed_on(side));
     let missing = missing_jars(jar_store, &requirements).map_err(|source| JarInputsError::Io {
         path: jar_store.to_owned(),
         source,

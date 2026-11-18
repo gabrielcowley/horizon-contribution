@@ -212,6 +212,13 @@ list, a leading, trailing or doubled `/`, a `.` or `..` segment, `\`, a glob cha
 `use-jar --take` also refuses an entry that matches no file in the jar; the game, which trusts the hash,
 only logs one. Two mods listing the same file each layer their own `take`.
 
+**Client-only jars.** A jar whose `take` names no `data/` prefix is needed on clients only. Dedicated
+servers, `--headless` runs (headless game tests among them) and the launcher's `server`, the server export
+and their `--allow-jar-downloads` paths leave it out: they never fetch, open or name it in an error. A
+client still refuses to load without it. A jar without `take`, or with any `data/` entry, is needed on both
+sides. A file shared by several mods is client-only only when every owner's `take` leaves out `data/`. There
+is no separate side key.
+
 Original jars stay in `<game home>/jars/<sha512>.jar`; no bytes are copied into a
 mod. The launcher checks and supplies exact files, and the existing ZIP readers
 write only the decoded resource cache. The complete ordered reference list,

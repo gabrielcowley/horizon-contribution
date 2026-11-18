@@ -147,7 +147,8 @@ cargo horizon-mod use-jar /path/to/original-mod.jar --take assets/original_mod -
 ```
 
 Each `--take` is checked as the manifest's `take` is, and also against the jar itself: an entry that matches no
-file in it is refused ([Taking part of a jar](../reference/manifest.md#original-java-jar-layers)). Listing a jar already listed with
+file in it is refused. A jar that takes no `data/` is client-only: servers and headless runs never fetch it
+([Taking part of a jar](../reference/manifest.md#original-java-jar-layers)). Listing a jar already listed with
 another `take` is an error; edit its entry instead.
 
 Jar bytes stay external. The launcher finds the exact hash locally or asks before downloading that exact file from

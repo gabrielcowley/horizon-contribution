@@ -265,7 +265,7 @@ fn changing_jar_list_or_order_rebuilds_and_missing_after_compose_keeps_the_old_r
             .clone();
     assert_ne!(shortened, reversed);
     assert_eq!(shortened_source.read(path).unwrap(), b"b");
-    check_jars(&shortened, &store).unwrap();
+    check_jars(&shortened, &store, Side::Client).unwrap();
     let relabeled = JarRef::new(b.id().into(), "2".into(), b.sha512().into()).unwrap();
     mods[0].jars[0] = relabeled.clone();
     let versioned = resource_root_fixture(&base, &store, &mods, &cache).unwrap();
@@ -287,7 +287,7 @@ fn changing_jar_list_or_order_rebuilds_and_missing_after_compose_keeps_the_old_r
     assert_eq!(missing.path, b.cache_path(&store));
     assert_eq!(fs::read_dir(&cache).unwrap().count(), before);
     assert_eq!(shortened_source.read(path).unwrap(), b"b");
-    let error = check_jars(&shortened, &store).unwrap_err();
+    let error = check_jars(&shortened, &store, Side::Client).unwrap_err();
     let JarInputsError::Missing(accepted_missing) = error else {
         panic!("expected typed missing accepted input, got {error:?}");
     };
@@ -298,7 +298,7 @@ fn changing_jar_list_or_order_rebuilds_and_missing_after_compose_keeps_the_old_r
 }
 
 #[test]
-fn a_jar_take_list_keeps_only_its_prefixes_from_both_packs() {
+fn a_jar_take_list_keeps_only_its_prefixes_from_both_packs_and_a_server_skips_a_client_only_jar() {
     let f = Fixture::new("take");
     let recipe = r#"{"type":"minecraft:crafting_shapeless","ingredients":["minecraft:stone"],"result":{"id":"minecraft:dirt","count":1}}"#;
     let whole = f.jar(
@@ -349,7 +349,8 @@ fn a_jar_take_list_keeps_only_its_prefixes_from_both_packs() {
         .unwrap();
     let with_data = resource_root_fixture(&base, &store, &mods, &cache).unwrap();
     assert_ne!(with_data, root);
-    let resources = resolved_resources(&base, with_data, &store, &mods, cache).unwrap();
+    let resources =
+        resolved_resources(&base, with_data.clone(), &store, &mods, cache.clone()).unwrap();
     assert!(resources.data().contains("data/original/recipe/probe.json"));
     assert!(!resources.data().contains("data/foreign/recipe/probe.json"));
     assert!(
@@ -357,6 +358,23 @@ fn a_jar_take_list_keeps_only_its_prefixes_from_both_packs() {
             .source()
             .contains("assets/minecraft/atlases/blocks.json")
     );
+
+    // The accepted inputs record the client-only side; a server's reload check, which never
+    // needed the file, ignores it gone, while a client's still refuses.
+    let accepted: Vec<horizon_mod_package::manifest::JarRequirement> =
+        serde_json::from_slice(&fs::read(root.join(JAR_INPUTS)).unwrap()).unwrap();
+    assert_eq!(accepted[0].side, Side::Client);
+    assert_eq!(accepted[0].jar, whole);
+    fs::remove_file(whole.cache_path(&store)).unwrap();
+    check_jars(&root, &store, Side::Server).unwrap();
+    assert!(matches!(
+        check_jars(&root, &store, Side::Client),
+        Err(JarInputsError::Missing(_))
+    ));
+    assert!(matches!(
+        check_jars(&with_data, &store, Side::Server),
+        Err(JarInputsError::Missing(_))
+    ));
 }
 
 #[test]
@@ -366,7 +384,7 @@ fn accepted_jar_inputs_distinguish_unreadable_invalid_and_non_file_cache_entries
     let store = fixture.0.join("jars");
     fixture.write(&format!("accepted/{MARKER}"), "{}");
     let path = root.join(JAR_INPUTS);
-    let error = check_jars(&root, &store).unwrap_err();
+    let error = check_jars(&root, &store, Side::Client).unwrap_err();
     assert!(matches!(
         error,
         JarInputsError::Io { path: failed, source }
@@ -375,7 +393,7 @@ fn accepted_jar_inputs_distinguish_unreadable_invalid_and_non_file_cache_entries
 
     fixture.write(&format!("accepted/{JAR_INPUTS}"), "[");
     assert!(matches!(
-        check_jars(&root, &store).unwrap_err(),
+        check_jars(&root, &store, Side::Client).unwrap_err(),
         JarInputsError::Invalid { path: failed, .. } if failed == path
     ));
 
@@ -391,7 +409,7 @@ fn accepted_jar_inputs_distinguish_unreadable_invalid_and_non_file_cache_entries
     );
     fs::create_dir_all(jar.cache_path(&store)).unwrap();
     assert!(matches!(
-        check_jars(&root, &store).unwrap_err(),
+        check_jars(&root, &store, Side::Client).unwrap_err(),
         JarInputsError::Io { path: failed, source }
             if failed == store && source.kind() == std::io::ErrorKind::InvalidInput
     ));
