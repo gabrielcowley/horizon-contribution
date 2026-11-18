@@ -399,6 +399,10 @@ pub struct PlayerMotion {
     /// The contact actions this player's move queued, waiting for the game to call them
     /// back in the player's own turn.
     pub contact_actions: Vec<crate::block_contact::QueuedAction>,
+    /// The client's own predicted move's contacts with a block a client contact hook
+    /// listens to, in the order the move made them, for the game to ask the parts once
+    /// the tick is done. A replayed tick records none.
+    pub client_contacts: Vec<(mod_api::ContactMoment, BlockStateId, BlockPos)>,
     /// `Entity.pistonDeltas` and `pistonDeltasGameTime`: how far a moving
     /// block has pushed this entity this tick (0.51 at most on any axis).
     pub piston: horizon_world::piston_movement::PistonMovement,
@@ -1672,6 +1676,7 @@ impl MotionWorld<'_, '_, '_> {
         effects: &mut mod_api::InsideEffects,
     ) {
         let entity = self.player.entity_id;
+        self.client_contact(mod_api::ContactMoment::Inside, state, p);
         let Some(dimension) = crate::block_contact::current_level() else {
             return;
         };
@@ -1718,6 +1723,18 @@ impl MotionWorld<'_, '_, '_> {
                 p,
                 actions,
             );
+        }
+    }
+    /// Note a contact of the client's own predicted move with a block a client contact hook
+    /// listens to. Nothing is noted on a server, for a replayed tick, or where no part listens.
+    fn client_contact(&mut self, moment: mod_api::ContactMoment, state: BlockStateId, p: BlockPos) {
+        if self.player.client_side
+            && !self.player.replaying
+            && crate::block_contact::HOOKS
+                .get()
+                .is_some_and(|hooks| (hooks.client_listens)(moment, state))
+        {
+            self.player.client_contacts.push((moment, state, p));
         }
     }
     /// `Block.updateEntityAfterFallOn` for a part's block: a move of this player ended on
@@ -2396,6 +2413,11 @@ impl EntityMoveWorld for MotionWorld<'_, '_, '_> {
         Ok(true)
     }
     fn restitute(&mut self, state: BlockStateId, x: bool, z: bool, resolved: Vec3) -> Result<()> {
+        // Entity.move's landing response, on the client's own predicted move.
+        if self.player.collision.below {
+            let on = self.support(movement_support::LEGACY_SUPPORT_OFFSET)?;
+            self.client_contact(mod_api::ContactMoment::AfterFallOn, state, on);
+        }
         let input = RestitutionInput {
             block: state,
             collided_x: x,

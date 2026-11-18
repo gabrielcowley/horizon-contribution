@@ -224,6 +224,9 @@ pub struct Hooks {
     pub after_fall_on_listens: fn(BlockStateId) -> bool,
     pub after_fall_on:
         fn(&str, &mut DamageLevel<'_>, Contact<'_>, &mut Vec<mod_api::ContactAction>),
+    /// Whether a client contact hook (`client_entity_inside`, `client_entity_after_fall_on`)
+    /// has a part for this moment and block state: the client's own move notes the contact.
+    pub client_listens: fn(mod_api::ContactMoment, BlockStateId) -> bool,
 }
 
 /// A contact action a part queued mid-move, kept for the swept entity's own tick, where

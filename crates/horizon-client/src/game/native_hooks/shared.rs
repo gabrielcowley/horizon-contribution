@@ -1595,6 +1595,13 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
                 state,
             )
         },
+        client_listens: |moment, state| {
+            let hook = match moment {
+                mod_api::ContactMoment::Inside => mod_api::HookId::ClientEntityInside,
+                mod_api::ContactMoment::AfterFallOn => mod_api::HookId::ClientEntityAfterFallOn,
+            };
+            crate::game::api_values::block_state::block_listens(hook, state)
+        },
         after_fall_on: |dimension, level, c, actions| {
             // Staged as the inside contact is: a panic is contained and queues nothing.
             let mut staged = Vec::new();

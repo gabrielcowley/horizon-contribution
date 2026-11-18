@@ -1452,6 +1452,7 @@ horizon-client game::native_hooks::component_hover::component_hover_tests::a_mod
 horizon-client game::native_hooks::contact_action::contact_action_tests::a_panicking_action_rolls_back_and_is_switched_off lib daily resources
 horizon-client game::native_hooks::contact_action::contact_action_tests::a_players_contact_action_moves_it_and_skips_the_dead lib daily resources
 horizon-client game::native_hooks::contact_action::contact_action_tests::an_action_on_a_replaced_block_is_not_called lib daily resources
+horizon-client game::native_hooks::contact_action::contact_action_tests::the_local_players_client_contact_runs_with_the_client_host lib daily resources
 horizon-client game::native_hooks::contact_action::contact_action_tests::the_second_item_on_a_full_depot_stays_whole lib daily resources
 horizon-client game::native_hooks::customize_boss_event_progress::customize_boss_event_progress_tests::a_client_mod_hides_and_spaces_boss_bars lib daily resources
 horizon-client game::native_hooks::customize_chat_overlay::customize_chat_overlay_tests::a_client_mod_moves_the_chat lib daily resources

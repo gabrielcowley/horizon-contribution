@@ -30,6 +30,7 @@ impl PlayerMotion {
             block_landing: None,
             stuck_multiplier: Vec3::ZERO,
             contact_actions: Vec::new(),
+            client_contacts: Vec::new(),
             piston: Default::default(),
             yaw: 0.0,
             head_yaw: 0.0,

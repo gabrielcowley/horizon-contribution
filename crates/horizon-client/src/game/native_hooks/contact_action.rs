@@ -37,9 +37,12 @@ mod contact_action_tests {
         }
         fn contact_action(
             &self,
-            host: &mut dyn mod_api::ServerHost,
+            host: mod_api::HostSide<'_>,
             event: &mut mod_api::ContactActionEvent<'_>,
         ) {
+            let mod_api::HostSide::Server(host) = host else {
+                return;
+            };
             *self.called.lock().unwrap() += 1;
             assert_eq!(event.action.decode::<u8>().unwrap(), 1);
             if self.panic_after_write {
@@ -237,6 +240,83 @@ mod contact_action_tests {
                     *part.called.lock().unwrap(),
                     1,
                     "a dead player's action is dropped"
+                );
+            });
+        });
+    }
+
+    /// A client part: its `client_entity_inside` queues an action, and its `contact_action`
+    /// lifts the local player when it runs with the client host.
+    #[derive(Clone, Default)]
+    struct ClientConveyor(Arc<Mutex<Vec<&'static str>>>);
+    #[mod_api::horizon_part]
+    impl mod_api::BlockPart for ClientConveyor {
+        fn client_entity_inside(
+            &self,
+            _: &dyn mod_api::ClientHost,
+            event: &mut mod_api::ClientEntityInsideEvent<'_>,
+        ) {
+            self.0.lock().unwrap().push("asked");
+            event
+                .actions
+                .push(mod_api::ContactAction::new(&2u8).unwrap());
+        }
+        fn contact_action(
+            &self,
+            host: mod_api::HostSide<'_>,
+            event: &mut mod_api::ContactActionEvent<'_>,
+        ) {
+            if let mod_api::HostSide::Client(_) = host {
+                self.0.lock().unwrap().push("called on the client");
+                event.entity.movement[1] = 0.5;
+            }
+        }
+    }
+    struct ClientConveyorMod(ClientConveyor);
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for ClientConveyorMod {
+        fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+            let stone = r.block_key("minecraft:stone");
+            r.block_part(stone, self.0.clone());
+        }
+    }
+
+    /// The client's own move noted a contact with a client part's block: once the tick is
+    /// done the part is asked for actions, and the action runs with the client host and
+    /// moves the local player.
+    #[test]
+    #[ignore = "daily"]
+    fn the_local_players_client_contact_runs_with_the_client_host() {
+        let part = ClientConveyor::default();
+        let entry =
+            || mod_api::ModEntry::new("contact-client", Box::new(ClientConveyorMod(part.clone())));
+        crate::game::api_values::install_parts(&[entry()]).unwrap();
+        let mods: mod_api::Mods = vec![entry()].into();
+        mod_platform::testing::with_mods(mods, || {
+            crate::game::native_entity_refs::tests::with_client_game(|game| {
+                let _ = depot_and_item(game, 7);
+                let stone = game.world.block(0, 100, 0);
+                let mut player = horizon_client::motion::PlayerMotion::new(
+                    game.motion,
+                    horizon_core::geometry::Vec3::new(0.5, 100.2, 0.5),
+                )
+                .unwrap();
+                player.client_contacts.push((
+                    mod_api::ContactMoment::Inside,
+                    stone,
+                    horizon_core::position::BlockPos::new(0, 100, 0),
+                ));
+                game.player = Some(player);
+                game.run_client_contacts();
+                assert_eq!(
+                    *part.0.lock().unwrap(),
+                    vec!["asked", "called on the client"]
+                );
+                let player = game.player.as_ref().unwrap();
+                assert_eq!(player.velocity.y, 0.5);
+                assert!(
+                    player.client_contacts.is_empty(),
+                    "the contacts are used up"
                 );
             });
         });

@@ -9,8 +9,9 @@
 /// Generated dispatch entry points, not hand-written hook implementations.
 mod fire;
 pub(in crate::game) use fire::{
-    BlockDropsCall, BlockScreenEffectDrawCall, ConnectsToCall, ContactActionCall,
-    EntityChangeBlockPreCall, ItemAfterVerticalCollisionCall, UpdateShapeCall,
+    BlockDropsCall, BlockScreenEffectDrawCall, ClientEntityAfterFallOnCall, ClientEntityInsideCall,
+    ConnectsToCall, ContactActionCall, EntityChangeBlockPreCall, ItemAfterVerticalCollisionCall,
+    UpdateShapeCall,
 };
 use mod_api::{
     BlockEntityDataSource, BlockEntityRef, ClockAdjustment, ContactAction, ContactEntity,

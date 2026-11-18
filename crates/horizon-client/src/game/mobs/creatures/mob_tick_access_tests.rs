@@ -489,9 +489,12 @@ struct ContactProbe(Arc<Mutex<Vec<(i32, Option<[f64; 3]>)>>>);
 impl mod_api::BlockPart for ContactProbe {
     fn contact_action(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut mod_api::ContactActionEvent<'_>,
     ) {
+        let mod_api::HostSide::Server(host) = host else {
+            return;
+        };
         let live = host
             .entity(event.entity.id as u32)
             .and_then(|entity| entity.position(host));

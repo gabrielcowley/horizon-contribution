@@ -19,7 +19,8 @@ impl mod_api::BlockPart for Depot {
             event.queue(mod_api::ContactAction::new(&DepotAction::Take).unwrap());
         }
     }
-    fn contact_action(&self, host: &mut dyn mod_api::ServerHost, event: &mut mod_api::ContactActionEvent<'_>) {
+    fn contact_action(&self, host: mod_api::HostSide<'_>, event: &mut mod_api::ContactActionEvent<'_>) {
+        let mod_api::HostSide::Server(host) = host else { return };
         let Ok(DepotAction::Take) = event.action.decode() else { return };
         let Some(stack) = event.entity.item.take() else { return };
         // Insert into the depot's block entity at `event.pos` through `host`, then leave the
@@ -36,5 +37,9 @@ The insert is real, with no simulate step, and it sees the state of the tick so 
 - **Failures.** The callback runs in a transaction. A native panic or a wasm trap rolls back every write it made, leaves the entity as it was, and switches the part's `contact_action` off for the session (a wasm trap stops its mod's group).
 - **Sharing a block.** Every part attached to the block state hears every action queued there: ignore one you cannot decode.
 - **Which entities.** Players, mobs, dropped items and projectiles, on the server. A dropped item or a projectile is called back in its own tick; a mob straight after its tick, with its row back in the level's list, before the next mob ticks; a player in its own turn, after the server has checked its moves. A player is never discarded, and only a dropped item has a stack.
+
+## On the client
+
+A belt that carries the player must move the local player in the client's own prediction too, or the server's corrections jerk it along. The client side has its own two hooks, for the local player only: `client_entity_inside` and `client_entity_after_fall_on`. They read through the client host and queue actions as their server twins do. Once the client's predicted tick is done, the game asks them for each contact the move made, in order, and calls `contact_action` with `HostSide::Client` and the local player as `event.entity`. There the part may move the player, write the client's copy of a block entity, or send a payload to the server. It makes no authoritative writes, so nothing is rolled back; a native panic still switches the part off. A replayed tick (prediction catching up after a server correction) tells nothing.
 
 See the hook notes in [`contact_action.rs`](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/contact_action.rs) and [`entity_after_fall_on.rs`](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/entity_after_fall_on.rs).

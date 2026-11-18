@@ -235,8 +235,16 @@ impl Game<'_> {
         if actions.is_empty() {
             return false;
         }
-        let Some(dimension) = horizon_client::block_contact::current_level() else {
-            return false;
+        // A server calls back in its level's scope; the client, for its own player, in the
+        // level it shows.
+        let client = !self.is_logical_server();
+        let dimension = if client {
+            self.dim.id()
+        } else {
+            match horizon_client::block_contact::current_level() {
+                Some(dimension) => dimension,
+                None => return false,
+            }
         };
         for queued in actions {
             let Some(mut entity) = swept.view(self) else {
@@ -248,7 +256,7 @@ impl Game<'_> {
             }
             let failures = self.wasm_dispatch_failures.get();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                mod_api::run_transaction(self, |game, _| {
+                let mut call = |game: &mut Game<'_>| {
                     game.native_contact_action(crate::game::native_hooks::ContactActionCall {
                         dimension,
                         moment: queued.moment,
@@ -260,7 +268,13 @@ impl Game<'_> {
                     (game.wasm_dispatch_failures.get() == failures)
                         .then_some(())
                         .ok_or(())
-                })
+                };
+                // The client makes no authoritative writes: nothing there to roll back.
+                if client {
+                    call(self)
+                } else {
+                    mod_api::run_transaction(self, |game, _| call(game))
+                }
             }));
             match outcome {
                 Ok(Ok(())) => {
@@ -312,5 +326,60 @@ impl Game<'_> {
             return;
         };
         self.run_contact_actions(&mut SweptMob(id), actions);
+    }
+
+    /// The client's own predicted move's contacts: each one's client contact hook is asked
+    /// for contact actions, in the order the move made them, and the actions are called back
+    /// with the client host and the local player.
+    pub(in crate::game) fn run_client_contacts(&mut self) {
+        let Some((entity, contacts)) = self.player.as_mut().map(|player| {
+            (
+                player.entity_id,
+                std::mem::take(&mut player.client_contacts),
+            )
+        }) else {
+            return;
+        };
+        if contacts.is_empty() || self.is_logical_server() {
+            return;
+        }
+        let mut queued = Vec::new();
+        for (moment, state, pos) in contacts {
+            let mut actions = Vec::new();
+            let asked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match moment {
+                mod_api::ContactMoment::Inside => {
+                    self.native_client_entity_inside(
+                        crate::game::native_hooks::ClientEntityInsideCall {
+                            entity,
+                            state,
+                            pos,
+                            actions: &mut actions,
+                        },
+                    );
+                }
+                mod_api::ContactMoment::AfterFallOn => {
+                    self.native_client_entity_after_fall_on(
+                        crate::game::native_hooks::ClientEntityAfterFallOnCall {
+                            entity,
+                            state,
+                            pos,
+                            actions: &mut actions,
+                        },
+                    );
+                }
+            }));
+            if asked.is_ok() {
+                horizon_client::block_contact::queue_actions(
+                    &mut queued,
+                    moment,
+                    state,
+                    pos,
+                    actions,
+                );
+            } else {
+                log::error!("a client contact hook at {pos:?} panicked; its actions are dropped");
+            }
+        }
+        self.run_contact_actions(&mut SweptPlayer, queued);
     }
 }
