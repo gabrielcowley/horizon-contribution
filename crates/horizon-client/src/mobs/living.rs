@@ -103,6 +103,11 @@ pub struct Fluids {
     pub in_lava: bool,
     pub eye_in_water: bool,
     pub eye_in_lava: bool,
+    /// The mod fluid with entity rules the mob is deepest in (`getMaxHeightFluidType`). Not
+    /// water to the game: `in_water` stays water's alone.
+    pub immersion: Option<horizon_world::entity_fluid::Immersion>,
+    /// The rules of the mod fluid the mob's eyes are in, when that fluid declared any.
+    pub eye_immersion: Option<horizon_world::fluid::FluidImmersion>,
 }
 /// `FluidFlowWorld` over the mob's scene: the neighbours a flow vector reads.
 struct FlowScene<'a, 'w>(&'a MobWorld<'w>);
@@ -199,6 +204,55 @@ impl MobWorld<'_> {
             }
         }
         (water, lava)
+    }
+    /// The currents of the mod fluids that push entities over the deflated box, each summed on
+    /// its own as NeoForge sums each fluid type's, with the scale it pushes at.
+    fn mod_currents(&self, bounds: Aabb) -> Vec<(f64, CurrentAccumulator)> {
+        let base_y = bounds.min_position().y;
+        let b = bounds.deflate(Vec3::new(0.001, 0.001, 0.001));
+        let (lo, hi) = (b.min_position(), b.max_position());
+        let mut scene = FlowScene(self);
+        let mut currents: Vec<(horizon_world::fluid::ModFluid, f64, CurrentAccumulator)> =
+            Vec::new();
+        for x in lo.x.floor() as i32..=(hi.x.ceil() as i32 - 1) {
+            for y in lo.y.floor() as i32..=(hi.y.ceil() as i32 - 1) {
+                for z in lo.z.floor() as i32..=(hi.z.ceil() as i32 - 1) {
+                    let state = self.fluid_tables.fluid(self.world.block(x, y, z));
+                    let kind = state.kind();
+                    let (Some(fluid), Some(rules)) = (kind.mod_fluid(), kind.immersion()) else {
+                        continue;
+                    };
+                    if !rules.can_push_entity {
+                        continue;
+                    }
+                    let surface = f64::from(y) + self.fluid_height(x, y, z).1;
+                    if surface < lo.y {
+                        continue;
+                    }
+                    let at = match currents.iter().position(|(f, _, _)| *f == fluid) {
+                        Some(at) => at,
+                        None => {
+                            currents.push((fluid, rules.motion_scale, Default::default()));
+                            currents.len() - 1
+                        }
+                    };
+                    let current = &mut currents[at].2;
+                    current.height = current.height.max(surface - base_y);
+                    let p = BlockPos::new(x, y, z);
+                    let mut flow =
+                        crate::motion::pushing_flow(self.loop_context, &mut scene, state, p)
+                            .unwrap_or(Vec3::ZERO);
+                    if current.height < 0.4 {
+                        flow = flow.scale(current.height);
+                    }
+                    current.accumulate(flow);
+                }
+            }
+        }
+        currents
+            .into_iter()
+            .map(|(_, scale, current)| (scale, current))
+            .collect()
     }
     /// `Entity.updateFluidInteraction`'s pushes for an entity fluids push
     /// (`isPushedByFluid`) with the box `bounds`: its `velocity` after the
@@ -626,9 +680,18 @@ impl Mob {
     pub fn is_in_liquid(&self) -> bool {
         self.fluids.in_water || self.fluids.in_lava
     }
-    /// `FloatGoal.canUse` and the brains' `Swim`: water deeper than the jump threshold, or lava.
+    /// `FloatGoal.canUse` and the brains' `Swim`: water, or a mod fluid that `can_swim`, deeper
+    /// than the jump threshold, or lava.
     pub fn floats(&self) -> bool {
-        self.fluids.water > self.fluid_jump_threshold() || self.fluids.in_lava
+        let threshold = self.fluid_jump_threshold();
+        self.fluids.water > threshold
+            || self.fluids.in_lava
+            || self.swim_immersion().is_some_and(|m| m.height > threshold)
+    }
+    /// The mod fluid the mob is deepest in, when it `can_swim`: the mob moves and rises in it as
+    /// in water.
+    pub fn swim_immersion(&self) -> Option<horizon_world::entity_fluid::Immersion> {
+        self.fluids.immersion.filter(|m| m.rules.can_swim)
     }
     /// `Entity.isPushedByFluid`: water animals, turtles, axolotls, frogs and
     /// nautiluses keep their own course.
@@ -1028,6 +1091,15 @@ impl Mob {
         // EntityFluidInteraction.applyCurrentTo: the flow pushes the mob.
         if (self.fluids.in_water || self.fluids.in_lava) && self.pushed_by_fluid() {
             self.velocity = w.pushed_by_currents(self.bounds(), self.velocity);
+        }
+        // A mod fluid with entity rules pushes at its `motion_scale` and scales the fall.
+        if let Some(immersion) = self.fluids.immersion {
+            if self.pushed_by_fluid() {
+                for (scale, current) in w.mod_currents(self.bounds()) {
+                    let _ = current.apply_to(&mut Pushed(&mut self.velocity), scale);
+                }
+            }
+            self.fall_distance *= f64::from(immersion.rules.fall_distance_modifier);
         }
         if self.fluids.in_water {
             self.fall_distance = 0.0;
@@ -1555,7 +1627,8 @@ impl Mob {
             self.position.z.floor() as i32,
         );
         let stands_on_fluid = self.kind.flags.lava_walker && w.fluid(x, y, z) == Fluid::Lava;
-        if self.is_in_liquid() && self.affected_by_fluids() && !stands_on_fluid {
+        let in_fluid = self.is_in_liquid() || self.swim_immersion().is_some();
+        if in_fluid && self.affected_by_fluids() && !stands_on_fluid {
             self.travel_in_fluid(w, level, input, events);
         } else if self.extra.fall_flying {
             self.travel_fall_flying(w, level, input, events);
@@ -1804,7 +1877,8 @@ impl Mob {
         let falling = self.velocity.y <= 0.0;
         let old_y = self.position.y;
         let gravity = self.effective_gravity();
-        if self.fluids.in_water {
+        // A mod fluid that `can_swim` moves the mob as water does.
+        if self.fluids.in_water || !self.fluids.in_lava && self.swim_immersion().is_some() {
             let mut slow = if self.extra.sprinting {
                 0.9
             } else {
@@ -1892,12 +1966,15 @@ impl Mob {
     /// The jump part of LivingEntity.aiStep.
     pub fn handle_jumping(&mut self, w: &MobWorld) {
         if self.ai.jumping && self.affected_by_fluids() {
+            // `jumpInFluid` also rises in a mod fluid that `can_swim`.
+            let swim = self.swim_immersion();
             let (fluid_height, in_water_with_height) = if self.fluids.in_lava {
                 (self.fluids.lava, false)
             } else {
+                let height = self.fluids.water.max(swim.map_or(0.0, |m| m.height));
                 (
-                    self.fluids.water,
-                    self.fluids.in_water && self.fluids.water > 0.0,
+                    height,
+                    (self.fluids.in_water || swim.is_some()) && height > 0.0,
                 )
             };
             let threshold = self.fluid_jump_threshold();

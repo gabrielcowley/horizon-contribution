@@ -127,6 +127,8 @@ pub fn update_entity_fluids(
             0.0023333333333333335
         },
     );
+    // The current of each mod fluid that pushes entities, at its own `motion_scale`.
+    let _ = interaction.apply_mod_currents(&mut scene);
     (water_height, lava_height, eye_in_water)
 }
 impl ItemEntity {

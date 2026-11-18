@@ -51,7 +51,14 @@ impl MotionWorld<'_, '_, '_> {
             }
             self.player.fire_ticks -= 1;
         }
-        if self.player.fluids.was_touching_water {
+        // A mod fluid that `can_extinguish` puts the player out as water does.
+        let extinguishes = self
+            .player
+            .fluids
+            .interaction
+            .immersion()
+            .is_some_and(|immersion| immersion.rules.can_extinguish);
+        if self.player.fluids.was_touching_water || extinguishes {
             self.player.fire_ticks = self.player.fire_ticks.min(0);
         }
         Ok(())
@@ -68,7 +75,14 @@ impl MotionWorld<'_, '_, '_> {
             .registry
             .state(self.block(eye))
             .is_some_and(|state| state.name == "minecraft:bubble_column");
-        let submerged = self.player.is_eye_in_fluid(WATER) && !bubble_column;
+        // The eyes in a mod fluid that `can_drown` run the air down as water does.
+        let drowning_fluid = self
+            .player
+            .fluids
+            .interaction
+            .eye_immersion()
+            .is_some_and(|rules| rules.can_drown);
+        let submerged = (self.player.is_eye_in_fluid(WATER) || drowning_fluid) && !bubble_column;
         let drowns = submerged
             && !self.player.status.water_breathing
             && !self.player.status.breath_of_the_nautilus
@@ -246,7 +260,8 @@ pub(crate) fn cactus_contact(
 }
 impl LivingFluidWorld for MotionWorld<'_, '_, '_> {
     fn in_water(&mut self) -> Result<bool> {
-        Ok(self.player.fluids.was_touching_water)
+        // A mod fluid that `can_swim` moves the player as water does.
+        Ok(self.player.fluids.was_touching_water || self.player.swim_immersion().is_some())
     }
     fn sprinting(&mut self) -> Result<bool> {
         Ok(self.player.sprinting)
@@ -261,11 +276,11 @@ impl LivingFluidWorld for MotionWorld<'_, '_, '_> {
         Ok(self.player.status.dolphins_grace)
     }
     fn fluid_height(&mut self, tag: TravelFluidTag) -> Result<f64> {
-        Ok(self.player.fluid_height(if tag == TravelFluidTag::Lava {
-            LAVA
-        } else {
-            WATER
-        }))
+        if tag == TravelFluidTag::Lava {
+            return Ok(self.player.fluid_height(LAVA));
+        }
+        let swim = self.player.swim_immersion().map_or(0.0, |m| m.height);
+        Ok(self.player.fluid_height(WATER).max(swim))
     }
     fn fluid_jump_threshold(&mut self) -> Result<f64> {
         Ok(self.player.fluid_jump_threshold())
@@ -314,8 +329,16 @@ impl MotionWorld<'_, '_, '_> {
             return Ok(());
         }
         let in_lava = self.player.is_in_lava();
-        let height = self.player.fluid_height(if in_lava { LAVA } else { WATER });
-        let in_water = self.player.fluids.was_touching_water && height > 0.0;
+        // `jumpInFluid` also rises in a mod fluid that `can_swim`.
+        let swim = self.player.swim_immersion();
+        let height = if in_lava {
+            self.player.fluid_height(LAVA)
+        } else {
+            self.player
+                .fluid_height(WATER)
+                .max(swim.map_or(0.0, |m| m.height))
+        };
+        let in_water = (self.player.fluids.was_touching_water || swim.is_some()) && height > 0.0;
         let threshold = self.player.fluid_jump_threshold();
         let on_ground = self.player.ground.on_ground;
         if in_water && !(on_ground && height <= threshold) {

@@ -1837,7 +1837,11 @@ fn extinguish_if_wet(m: &mut Mob, w: &MobWorld, was_on_fire: bool, events: &mut 
     // Entity.applyEffectsFromBlocks snapshots burning before contact ignition.
     // Rain also clears newly ignited fire, but only a previously burning mob
     // plays the hiss and consumes its two pitch draws. This includes NoAI mobs.
-    if m.fire_ticks > 0 && (m.fluids.in_water || in_rain(m, w)) {
+    let extinguishing_fluid = m
+        .fluids
+        .immersion
+        .is_some_and(|immersion| immersion.rules.can_extinguish);
+    if m.fire_ticks > 0 && (m.fluids.in_water || extinguishing_fluid || in_rain(m, w)) {
         m.fire_ticks = 0;
         if was_on_fire {
             events.push(MobEvent::Sound(
@@ -1979,7 +1983,9 @@ fn base_tick(
             // LivingEntity.baseTick / MobEffectUtil: bubble columns and breathing
             // effects protect submerged mobs. Nautilus alone holds air rather
             // than refilling it; Water Breathing or Conduit Power still refill.
-            let submerged = m.fluids.eye_in_water
+            // The eyes in a mod fluid that `can_drown` run the air down as water does.
+            let drowning_fluid = m.fluids.eye_immersion.is_some_and(|rules| rules.can_drown);
+            let submerged = (m.fluids.eye_in_water || drowning_fluid)
                 && w.block_name(
                     m.position.x.floor() as i32,
                     m.eye_y().floor() as i32,

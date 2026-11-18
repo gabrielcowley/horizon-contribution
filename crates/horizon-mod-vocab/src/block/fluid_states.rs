@@ -21,8 +21,9 @@ pub enum FluidDefinition {
 
 /// What a registered fluid is, apart from any level or entity. Vanilla reads the entity
 /// behaviours off `FluidTags.WATER` and `FluidTags.LAVA`, so `minecraft:flowing_water` answers as
-/// `minecraft:water`. The empty fluid and a tank-only fluid emit no light, nothing can be done in
-/// them, their fall modifier scales nothing and they drip nothing and never tick randomly.
+/// `minecraft:water`. A mod's world fluid answers the entity behaviours its `immersion` declared;
+/// one without, the empty fluid and a tank-only fluid can have nothing done in them, their fall
+/// modifier scales nothing and they drip nothing and never tick randomly.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
 #[derive(horizon_mod_api_macros::Wire)]
@@ -30,8 +31,12 @@ pub struct FluidTypeProperties {
     /// `FluidType.getDescriptionId`: `fluid_type.<mod>.<name>`, vanilla's by its block
     /// (`block.minecraft.water`, `block.minecraft.air` for the empty fluid).
     pub description_id: String,
-    /// `FluidType.getLightLevel`: what the fluid's block emits, 0 through 15.
+    /// `FluidType.getLightLevel`: the light the fluid gives off, 0 through 15, in a tank as
+    /// from its block: what a mod declared, or what vanilla's block emits.
     pub light_level: u8,
+    /// `FluidType.isLighterThanAir` (a density of 0 or less): whether it is a gas, drawn and
+    /// filled from the top of what holds it. Only a mod's fluid can be.
+    pub lighter_than_air: bool,
     /// `FluidType.getFallDistanceModifier`: what an entity's fall distance is multiplied by
     /// each tick in the fluid: water's 0 resets it, lava's 0.5 halves it.
     pub fall_distance_modifier: f32,

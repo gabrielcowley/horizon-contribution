@@ -51,20 +51,31 @@ impl Game<'_> {
         let kind = FluidKind::from_name(id);
         let water = kind.is_some_and(|kind| kind.same_family(FluidKind::Water));
         let lava = kind.is_some_and(|kind| kind.same_family(FluidKind::Lava));
+        // A mod's fluid, tank-only or in the world, carries its own light and gas flag; a world
+        // fluid's entity behaviours are what its `immersion` declared.
+        let look = horizon_client::mod_content::fluid_look(id).or_else(|| {
+            let source = kind?.mod_fluid()?.get();
+            horizon_client::mod_content::fluid_look(&source.id)
+        });
+        let immersion = kind.and_then(FluidKind::immersion);
         Some(FluidTypeProperties {
             description_id,
-            light_level: block.map_or(0, |block| block.emission),
-            fall_distance_modifier: match (water, lava) {
-                (true, _) => 0.0,
-                (_, true) => 0.5,
+            light_level: block.map_or(look.as_ref().map_or(0, |look| look.light_level), |block| {
+                block.emission
+            }),
+            lighter_than_air: look.as_ref().is_some_and(|look| look.lighter_than_air),
+            fall_distance_modifier: match (water, lava, immersion) {
+                (true, _, _) => 0.0,
+                (_, true, _) => 0.5,
+                (_, _, Some(immersion)) => immersion.fall_distance_modifier,
                 _ => 1.0,
             },
-            can_push_entity: water || lava,
-            can_swim: water,
-            can_drown: water,
-            can_extinguish: water,
+            can_push_entity: water || lava || immersion.is_some_and(|i| i.can_push_entity),
+            can_swim: water || immersion.is_some_and(|i| i.can_swim),
+            can_drown: water || immersion.is_some_and(|i| i.can_drown),
+            can_extinguish: water || immersion.is_some_and(|i| i.can_extinguish),
             can_hydrate: water,
-            supports_boating: water,
+            supports_boating: water || immersion.is_some_and(|i| i.supports_boating),
             explosion_resistance: kind.map_or(0.0, fluid_explosion_resistance),
             randomly_ticks: kind.is_some_and(fluid_randomly_ticks),
             drip_particle: kind.and_then(fluid_drip_particle).map(str::to_owned),
@@ -663,6 +674,7 @@ mod tests {
             let water = FluidTypeProperties {
                 description_id: "block.minecraft.water".into(),
                 light_level: 0,
+                lighter_than_air: false,
                 fall_distance_modifier: 0.0,
                 can_push_entity: true,
                 can_swim: true,
@@ -677,6 +689,7 @@ mod tests {
             let lava = FluidTypeProperties {
                 description_id: "block.minecraft.lava".into(),
                 light_level: 15,
+                lighter_than_air: false,
                 fall_distance_modifier: 0.5,
                 can_push_entity: true,
                 can_swim: false,

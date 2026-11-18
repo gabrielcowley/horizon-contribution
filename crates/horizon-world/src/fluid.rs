@@ -20,9 +20,30 @@ pub struct ModFluidRules {
     pub converts_to_source: bool,
 }
 
+/// How entities feel a mod's world fluid, as NeoForge's `FluidType` getters of the same names.
+/// A fluid without one is felt by nothing: entities pass through it as through air.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FluidImmersion {
+    /// `FluidType.canSwim`: entities move in it as in water, rise in it, and swim in it.
+    pub can_swim: bool,
+    /// `FluidType.canPushEntity`: its current pushes the entities in it.
+    pub can_push_entity: bool,
+    /// `FluidType.motionScale`: how hard its current pushes (water's 0.014).
+    pub motion_scale: f64,
+    /// `FluidType.canDrownIn`: an entity's air runs down while its eyes are in it.
+    pub can_drown: bool,
+    /// `FluidType.canExtinguish`: it puts out a burning entity.
+    pub can_extinguish: bool,
+    /// `FluidType.getFallDistanceModifier`: what an entity's fall distance is multiplied by
+    /// each tick it is in the fluid.
+    pub fall_distance_modifier: f32,
+    /// `FluidType.supportsBoating`: a boat floats on it.
+    pub supports_boating: bool,
+}
+
 /// A world fluid a mod registered: its two registry names, the block that holds it in the
 /// world and the bucket that carries it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ModFluidType {
     /// `<namespace>:<path>`, which is also its block's id.
     pub id: String,
@@ -31,6 +52,8 @@ pub struct ModFluidType {
     /// The filled bucket, when the fluid has one.
     pub bucket: Option<String>,
     pub rules: ModFluidRules,
+    /// How entities feel it; none leaves it inert to them.
+    pub immersion: Option<FluidImmersion>,
 }
 
 /// A registered [`ModFluidType`]: small and copied around as vanilla's kinds are. Saved and
@@ -230,6 +253,11 @@ impl FluidKind {
         } else {
             Self::ModFlowing(fluid)
         })
+    }
+    /// How entities feel a mod's fluid, when it declared that they do. Water and lava answer
+    /// none: entities feel them through `#minecraft:water` and `#minecraft:lava`.
+    pub fn immersion(self) -> Option<FluidImmersion> {
+        self.mod_fluid()?.get().immersion
     }
     /// The mod fluid this is a form of.
     pub const fn mod_fluid(self) -> Option<ModFluid> {
@@ -588,6 +616,7 @@ mod mod_fluid_tests {
                 slope_find_distance: 2,
                 converts_to_source: false,
             },
+            immersion: None,
         })
         .unwrap()
     }

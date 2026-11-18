@@ -498,13 +498,15 @@ struct CreativeTabFile {
 struct FluidFile {
     sprite: Option<String>,
     tint: Option<u32>,
+    light_level: Option<u8>,
+    lighter_than_air: Option<bool>,
     world: Option<WorldFluid>,
 }
 
 /// What makes a fluid exist in the world: a block holding it, as `minecraft:water`'s does, and
 /// how it flows. Each value defaults to water's, in `data/<id>/horizon/fluid/` as in code
 /// (`Registrar::declare_world_fluid`).
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, horizon_mod_api_macros::Wire)]
 #[wire(crate = ::mod_vocab::wire)]
 #[serde(default, deny_unknown_fields)]
 pub struct WorldFluid {
@@ -519,6 +521,11 @@ pub struct WorldFluid {
     pub source_conversion: bool,
     /// Whether it has a filled bucket, the item `<id>_bucket`.
     pub bucket: bool,
+    /// How entities feel it, as NeoForge's `FluidType` properties of the same names. None: no
+    /// entity feels it, and they pass through it as through air.
+    pub immersion: Option<FluidImmersion>,
+    /// Its block's `MapColor` id, 0 to 61; water's (12) when unset.
+    pub map_color: Option<u8>,
 }
 impl Default for WorldFluid {
     fn default() -> Self {
@@ -528,7 +535,57 @@ impl Default for WorldFluid {
             slope_find_distance: 4,
             source_conversion: false,
             bucket: true,
+            immersion: None,
+            map_color: None,
         }
+    }
+}
+
+/// How entities in a world fluid feel it, NeoForge's `FluidType.Properties` of the same names.
+/// Each value an `immersion` leaves out is NeoForge's default.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, horizon_mod_api_macros::Wire)]
+#[wire(crate = ::mod_vocab::wire)]
+#[serde(default, deny_unknown_fields)]
+pub struct FluidImmersion {
+    /// `canSwim`: entities move in it as in water, rise in it and swim in it. True by default.
+    pub can_swim: bool,
+    /// `canPushEntity`: its current pushes entities, at `motion_scale`. True by default.
+    pub can_push_entity: bool,
+    /// `motionScale`: how hard its current pushes, 0 or more. 0.014 by default, water's.
+    pub motion_scale: f64,
+    /// `canDrown`: an entity's air runs out with its eyes in it. True by default.
+    pub can_drown: bool,
+    /// `canExtinguish`: it puts out a burning entity. False by default.
+    pub can_extinguish: bool,
+    /// `fallDistanceModifier`: what an entity's fall distance is multiplied by each tick in
+    /// it, 0 or more. 0.5 by default.
+    pub fall_distance_modifier: f32,
+    /// `supportsBoating`: a boat floats on it. False by default.
+    pub supports_boating: bool,
+}
+impl Default for FluidImmersion {
+    fn default() -> Self {
+        Self {
+            can_swim: true,
+            can_push_entity: true,
+            motion_scale: 0.014,
+            can_drown: true,
+            can_extinguish: false,
+            fall_distance_modifier: 0.5,
+            supports_boating: false,
+        }
+    }
+}
+impl FluidImmersion {
+    /// Refuses a scale no entity could be moved by: not a number, infinite, or negative.
+    pub fn check(&self) -> Result<(), String> {
+        if !self.motion_scale.is_finite() || self.motion_scale < 0.0 {
+            return Err("immersion: motion_scale is a finite number, 0 or more".into());
+        }
+        if !self.fall_distance_modifier.is_finite() || self.fall_distance_modifier < 0.0 {
+            return Err("immersion: fall_distance_modifier is a finite number, 0 or more".into());
+        }
+        Ok(())
     }
 }
 impl WorldFluid {
@@ -543,6 +600,12 @@ impl WorldFluid {
         if !(1..=4).contains(&self.slope_find_distance) {
             return Err("slope_find_distance is 1 to 4".into());
         }
+        if self.map_color.is_some_and(|c| c > 61) {
+            return Err("map_color is a MapColor id, 0 to 61".into());
+        }
+        if let Some(immersion) = &self.immersion {
+            immersion.check()?;
+        }
         Ok(())
     }
 }
@@ -550,7 +613,7 @@ impl WorldFluid {
 /// How a fluid the mod names looks on the client (`data/<id>/horizon/fluid/`), as
 /// NeoForge's `IClientFluidTypeExtensions`: `getStillTexture` and `getTintColor`.
 /// The fluid needs no block, so it can be a fluid only a tank holds.
-#[derive(Clone, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[derive(Clone, Debug, PartialEq, horizon_mod_api_macros::Wire)]
 #[wire(crate = ::mod_vocab::wire)]
 pub struct FluidLook {
     /// `<mod id>:<path>`.
@@ -559,6 +622,12 @@ pub struct FluidLook {
     pub sprite: Option<String>,
     /// `0xAARRGGBB`.
     pub tint: Option<u32>,
+    /// `FluidType.getLightLevel`, 0 to 15: what the fluid gives off wherever it is, in a tank
+    /// or as its world block. 0 when unset.
+    pub light_level: u8,
+    /// Whether it is a gas (NeoForge's `FluidType.isLighterThanAir`, a density of 0 or less):
+    /// drawn and filled from the top of what holds it. False when unset.
+    pub lighter_than_air: bool,
     /// How it exists in the world; none for a fluid only a tank holds.
     pub world: Option<WorldFluid>,
 }
@@ -578,9 +647,14 @@ impl FluidLook {
     }
     /// The block a world fluid is in the world: water's behaviour and states under its own id.
     pub fn world_block(&self) -> Option<Block> {
-        self.world.map(|_| Block {
+        self.world.map(|world| Block {
             id: self.id.clone(),
             template: "minecraft:water".into(),
+            properties: BlockProperties {
+                light: (self.light_level > 0).then_some(self.light_level),
+                map_color: world.map_color,
+                ..BlockProperties::default()
+            },
             ..Block::default()
         })
     }
@@ -1310,10 +1384,15 @@ impl Content {
             if let Some(world) = &file.world {
                 world.check().map_err(|e| format!("{name}: world: {e}"))?;
             }
+            if file.light_level.is_some_and(|l| l > 15) {
+                return Err(format!("{name}: light_level is 0 to 15"));
+            }
             let look = FluidLook {
                 id: fluid,
                 sprite: file.sprite,
                 tint: file.tint,
+                light_level: file.light_level.unwrap_or(0),
+                lighter_than_air: file.lighter_than_air.unwrap_or(false),
                 world: file.world,
             };
             if self.fluids.iter().any(|known| {
@@ -3313,12 +3392,16 @@ capabilities = ["registries"]
                     id: "ruby:bare".into(),
                     sprite: None,
                     tint: None,
+                    light_level: 0,
+                    lighter_than_air: false,
                     world: None,
                 },
                 FluidLook {
                     id: "ruby:steam".into(),
                     sprite: Some("ruby:gui/fluids/steam".into()),
                     tint: Some(4291343520),
+                    light_level: 0,
+                    lighter_than_air: false,
                     world: None,
                 },
             ]

@@ -1,1 +1,1 @@
-pub use world::world_fluid::WorldFluid;
+pub use world::world_fluid::{FluidImmersion, WorldFluid};

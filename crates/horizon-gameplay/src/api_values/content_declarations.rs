@@ -236,12 +236,24 @@ impl TryIntoEngine<()> for (String, mod_api::WorldFluid) {
             id: id.clone(),
             sprite: None,
             tint: None,
+            light_level: 0,
+            lighter_than_air: false,
             world: Some(engine::WorldFluid {
                 tick_delay: fluid.tick_delay,
                 drop_off: fluid.drop_off,
                 slope_find_distance: fluid.slope_find_distance,
                 source_conversion: fluid.source_conversion,
                 bucket: fluid.bucket,
+                immersion: fluid.immersion.map(|i| engine::FluidImmersion {
+                    can_swim: i.can_swim,
+                    can_push_entity: i.can_push_entity,
+                    motion_scale: i.motion_scale,
+                    can_drown: i.can_drown,
+                    can_extinguish: i.can_extinguish,
+                    fall_distance_modifier: i.fall_distance_modifier,
+                    supports_boating: i.supports_boating,
+                }),
+                map_color: fluid.map_color,
             }),
         })
     }

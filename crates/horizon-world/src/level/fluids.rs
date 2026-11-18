@@ -1010,6 +1010,7 @@ mod tests {
                     slope_find_distance: 4,
                     converts_to_source: false,
                 },
+                immersion: None,
             })
             .unwrap(),
         )

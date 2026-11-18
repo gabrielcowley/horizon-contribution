@@ -4,6 +4,7 @@ use super::super::MobWorld;
 use super::Fluids;
 use crate::blocks::Fluid;
 use horizon_core::geometry::{Aabb, Vec3};
+use horizon_world::entity_fluid::Immersion;
 
 impl MobWorld<'_> {
     /// FluidState.getHeight: a full block under the same fluid, else amount / 9.
@@ -66,6 +67,9 @@ impl MobWorld<'_> {
                     let top = f64::from(y) + h;
                     if top >= lo.y {
                         let depth = top - bottom;
+                        if fluid == Fluid::Modded {
+                            self.track_immersion(&mut out, x, y, z, depth);
+                        }
                         match fluid {
                             Fluid::Water => {
                                 out.water = out.water.max(depth);
@@ -85,13 +89,25 @@ impl MobWorld<'_> {
         // EntityFluidInteraction.update: the eyes are in a fluid block of
         // the box in the entity's column, between its bottom and its height
         // for the camera, for water and for lava.
+        let mut eye_fluid = None;
         for y in lo.y.floor() as i32..=(hi.y.ceil() as i32 - 1) {
             let (fluid, h) = self.fluid_height(ex, y, ez);
-            // `updateFluidOnEyes` tracks every fluid tag: water and lava.
+            // `updateFluidOnEyes` tracks every fluid tag, water and lava, and every mod fluid
+            // with entity rules (NeoForge's fluid types).
+            let mut modded = None;
+            let mut unused = false;
             let eyes = match fluid {
                 Fluid::Water => &mut out.eye_in_water,
                 Fluid::Lava => &mut out.eye_in_lava,
-                Fluid::None | Fluid::Modded => continue,
+                Fluid::Modded => {
+                    let kind = self.fluid_tables.fluid(self.world.block(ex, y, ez)).kind();
+                    let (Some(fluid), Some(rules)) = (kind.mod_fluid(), kind.immersion()) else {
+                        continue;
+                    };
+                    modded = Some((fluid, rules));
+                    &mut unused
+                }
+                Fluid::None => continue,
             };
             if f64::from(y) + h < lo.y || eye_y < f64::from(y) {
                 continue;
@@ -110,9 +126,38 @@ impl MobWorld<'_> {
             };
             if eye_y <= f64::from(y) + camera {
                 *eyes = true;
+                if let Some(modded) = modded {
+                    eye_fluid = eye_fluid.or(Some(modded));
+                }
+            }
+        }
+        if let Some((fluid, rules)) = eye_fluid {
+            out.eye_immersion = Some(rules);
+            if let Some(immersion) = out.immersion.as_mut().filter(|i| i.fluid == fluid) {
+                immersion.eyes_inside = true;
             }
         }
         out
+    }
+    /// A mod fluid cell of the box `depth` deep: kept when its fluid declared entity rules and
+    /// is the deepest such fluid so far (NeoForge's `getMaxHeightFluidType`; the first on a tie).
+    fn track_immersion(&self, out: &mut Fluids, x: i32, y: i32, z: i32, depth: f64) {
+        let kind = self.fluid_tables.fluid(self.world.block(x, y, z)).kind();
+        let (Some(fluid), Some(rules)) = (kind.mod_fluid(), kind.immersion()) else {
+            return;
+        };
+        match &mut out.immersion {
+            Some(known) if known.fluid == fluid => known.height = known.height.max(depth),
+            Some(known) if known.height >= depth => {}
+            _ => {
+                out.immersion = Some(Immersion {
+                    fluid,
+                    height: depth,
+                    eyes_inside: false,
+                    rules,
+                })
+            }
+        }
     }
 }
 

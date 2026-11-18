@@ -147,6 +147,17 @@ pub fn register_world_fluids(
                 slope_find_distance: world.slope_find_distance,
                 converts_to_source: world.source_conversion,
             },
+            immersion: world
+                .immersion
+                .map(|i| horizon_world::fluid::FluidImmersion {
+                    can_swim: i.can_swim,
+                    can_push_entity: i.can_push_entity,
+                    motion_scale: i.motion_scale,
+                    can_drown: i.can_drown,
+                    can_extinguish: i.can_extinguish,
+                    fall_distance_modifier: i.fall_distance_modifier,
+                    supports_boating: i.supports_boating,
+                }),
         })?;
     }
     Ok(names)

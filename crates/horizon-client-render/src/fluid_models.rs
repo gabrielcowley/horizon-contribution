@@ -257,6 +257,8 @@ mod tests {
             id: id.into(),
             sprite: sprite.map(Into::into),
             tint,
+            light_level: 0,
+            lighter_than_air: false,
             world: Some(WorldFluid::default()),
         }
     }

@@ -69,6 +69,19 @@ impl Game<'_> {
     fn fluid_height(&self, x: i32, y: i32, z: i32) -> Option<(f32, bool)> {
         self.fluid_height_of(x, y, z, Some(Fluid::Water))
     }
+    /// [`Self::fluid_height`] for what a boat floats on (NeoForge's `canBoatInFluid`): water,
+    /// and a mod's world fluid that declared `supports_boating`.
+    fn boat_fluid_height(&self, x: i32, y: i32, z: i32) -> Option<(f32, bool)> {
+        let f = self.res.facts().get(self.world.block(x, y, z));
+        if f.fluid != Fluid::Modded {
+            return self.fluid_height(x, y, z);
+        }
+        horizon_world::fluid::mod_fluid_named(&f.name)?
+            .get()
+            .immersion
+            .filter(|immersion| immersion.supports_boating)?;
+        self.fluid_height_of(x, y, z, Some(Fluid::Modded))
+    }
     /// The horizontal water plane around the camera for the water mirror: the median
     /// standing-water surface of a grid of columns 48 blocks around, each scanned down from
     /// the camera to its ground. A lake or the sea has one plane; the mirror shows only the
@@ -161,7 +174,7 @@ impl Game<'_> {
             let mut height = 0.0f32;
             for x in lo.x.floor() as i32..hi.x.ceil() as i32 {
                 for z in lo.z.floor() as i32..hi.z.ceil() as i32 {
-                    if let Some((h, _)) = self.fluid_height(x, y, z) {
+                    if let Some((h, _)) = self.boat_fluid_height(x, y, z) {
                         height = height.max(h);
                     }
                     if height >= 1.0 {
@@ -184,7 +197,7 @@ impl Game<'_> {
         for x in lo.x.floor() as i32..hi.x.ceil() as i32 {
             for y in hi.y.floor() as i32..max_y.ceil() as i32 {
                 for z in lo.z.floor() as i32..hi.z.ceil() as i32 {
-                    if let Some((h, source)) = self.fluid_height(x, y, z)
+                    if let Some((h, source)) = self.boat_fluid_height(x, y, z)
                         && max_y < f64::from(y as f32 + h)
                     {
                         if !source {
@@ -206,7 +219,7 @@ impl Game<'_> {
         for x in lo.x.floor() as i32..hi.x.ceil() as i32 {
             for y in lo.y.floor() as i32..(lo.y + 0.001).ceil() as i32 {
                 for z in lo.z.floor() as i32..hi.z.ceil() as i32 {
-                    if let Some((h, _)) = self.fluid_height(x, y, z) {
+                    if let Some((h, _)) = self.boat_fluid_height(x, y, z) {
                         // `float height = y + getHeight`: summed in float.
                         let level = f64::from(y as f32 + h);
                         b.water_level = b.water_level.max(level);

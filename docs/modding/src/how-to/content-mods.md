@@ -155,8 +155,19 @@ NeoForge's `IClientFluidTypeExtensions`; the fluid needs no block, and a recipe 
 object makes it exist in the world: `{"world": {}}` adds the block `<id>:<path>`, a copy of `minecraft:water` that flows
 with vanilla's fluid simulation, and the bucket item `<id>:<path>_bucket`, which needs its model as any item does. `world`
 takes `tick_delay` (1 or more, default 5), `drop_off` (1 to 7, default 1), `slope_find_distance` (1 to 4, default 4),
-`source_conversion` (default false) and `bucket` (default true). The fluid is in no vanilla fluid tag, so entities don't
-swim in it or get pushed by it. In the world it draws its `sprite`, a block atlas texture such as `mymod:block/oil`, times
+`source_conversion` (default false), `bucket` (default true), `map_color` (its block's `MapColor` id, 0 to 61, water's
+when unset) and `immersion`. The fluid is in no vanilla fluid tag, so `#minecraft:water` rules (conduits, bubble columns,
+farmland) never see it. Without `immersion` no entity feels it: they pass through it as through air. An `immersion`
+object, NeoForge's `FluidType.Properties` of the same names, makes entities feel it: `can_swim` (default true:
+entities move, rise and swim in it as in water), `can_push_entity` (default true) with `motion_scale` (default 0.014,
+water's), `can_drown` (default true: air runs down with the eyes in it), `can_extinguish` (default false),
+`fall_distance_modifier` (default 0.5: the fall distance is multiplied by it each tick in the fluid) and
+`supports_boating` (default false: a boat floats on it). `motion_scale` and `fall_distance_modifier` are finite and 0
+or more; an out-of-range value is refused, never clamped. Where an entity is in more than one such fluid, the deepest
+one's rules apply. Any fluid, tank-only or in the world, can also set `light_level` (0 to 15, default 0: what it gives
+off in a tank, and its block's light) and `lighter_than_air` (default false: a gas, drawn and filled from the top of
+what holds it); `mod_api::FluidStates::type_properties` answers both, and a world fluid's `immersion`, on either side.
+Code declares the same `immersion` and `map_color` on `mod_api::WorldFluid`. In the world it draws its `sprite`, a block atlas texture such as `mymod:block/oil`, times
 its `tint`; with neither it looks like water, and a `tint` alone colours water's textures. A client mod's
 `register_fluid_models` hook collects `mod_api::FluidModel` values with separate flowing and overlay sprites.
 It is collected again before each resource bake, so a resource reload can change model identifiers as well as textures. Far terrain (LOD) omits mod fluids. LAN and dedicated server players play with them when they run the same mods: a client whose mods add different

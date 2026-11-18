@@ -7800,6 +7800,7 @@ mod tests {
                 slope_find_distance: 4,
                 converts_to_source: false,
             },
+            immersion: None,
         });
         let fluid = fluid.unwrap();
         let tick = |kind: FluidKind| SavedTick {
