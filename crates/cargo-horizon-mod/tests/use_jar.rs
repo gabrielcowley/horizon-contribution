@@ -132,15 +132,9 @@ fn use_jar_records_exact_metadata_hash_and_order_without_copying_the_jar() {
 #[test]
 #[ignore = "daily"]
 fn use_jar_take_records_checked_prefixes_and_refuses_one_matching_nothing() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
-        "target/use-jar-take-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&root).unwrap();
+    // Removed on drop, so a failing run leaves nothing behind.
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
     let binary = env!("CARGO_BIN_EXE_cargo-horizon-mod");
     let created = Command::new(binary)
         .current_dir(&root)
@@ -211,5 +205,4 @@ fn use_jar_take_records_checked_prefixes_and_refuses_one_matching_nothing() {
     let other = use_jar(&["assets/original_mod"]);
     assert!(!other.status.success());
     assert!(String::from_utf8_lossy(&other.stderr).contains("already listed with take"));
-    fs::remove_dir_all(root).unwrap();
 }
