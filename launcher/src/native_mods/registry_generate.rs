@@ -41,7 +41,7 @@ pub(super) fn stage(bundle: &Bundle, output: &Path) -> Result<(), String> {
                 ));
             }
         }
-        rewrite_dependencies(bundle, &relative, &mut manifest, &mut todo)?;
+        let mut named = rewrite_dependencies(bundle, &relative, &mut manifest, &mut todo)?;
         if let Some(targets) = manifest
             .get_mut("target")
             .and_then(toml::Value::as_table_mut)
@@ -50,8 +50,20 @@ pub(super) fn stage(bundle: &Bundle, output: &Path) -> Result<(), String> {
                 .iter_mut()
                 .filter_map(|(_, value)| value.as_table_mut())
             {
-                rewrite_dependencies(bundle, &relative, target, &mut todo)?;
+                named.extend(rewrite_dependencies(bundle, &relative, target, &mut todo)?);
             }
+        }
+        // A proc macro compiles for the host, where the SDK's game libraries don't link.
+        let proc_macro = manifest
+            .get("lib")
+            .and_then(|lib| lib.get("proc-macro"))
+            .and_then(toml::Value::as_bool)
+            == Some(true);
+        if proc_macro && !named.is_empty() {
+            return Err(crate::i18n::trf(
+                "{crate}: a proc-macro crate can't depend on the mod API; keep the API calls in the crates its macros expand into",
+                &[("crate", &relative.display().to_string())],
+            ));
         }
         manifest.remove("bin");
         manifest.remove("example");
@@ -107,11 +119,29 @@ pub(super) fn rewrite_dependencies(
             if let Some(&(name, library)) = api::PACKAGES.iter().find(|(name, _)| *name == package)
             {
                 api::sdk_source_at(relative, key, name, dep)?;
-                if name == api::INTERNALS_PACKAGE && !relative.as_os_str().is_empty() {
-                    return Err(format!(
-                        "{key}: {name} belongs in the mod's root crate, not the local crate {}",
-                        relative.display()
+                let local = !relative.as_os_str().is_empty();
+                if local && name == api::INTERNALS_PACKAGE {
+                    return Err(crate::i18n::trf(
+                        "{key}: {package} belongs in the mod's root crate, not the local crate {crate}",
+                        &[
+                            ("key", key),
+                            ("package", name),
+                            ("crate", &relative.display().to_string()),
+                        ],
                     ));
+                }
+                // The root crate's feature requests are refused before the build (`prebuilt`):
+                // the SDK is compiled once, with its pinned features, for every crate.
+                let own_features = dep
+                    .get("features")
+                    .and_then(toml::Value::as_array)
+                    .is_some_and(|f| !f.is_empty())
+                    || dep.get("default-features").and_then(toml::Value::as_bool) == Some(false);
+                if local && own_features {
+                    return Err(super::Refusal::Features {
+                        mod_id: bundle.manifest.id.clone(),
+                    }
+                    .to_string());
                 }
                 let alias = if key == name {
                     library.to_owned()
@@ -347,6 +377,43 @@ mod tests {
         );
         let error = rewrite("src/crates/helper").0.unwrap_err();
         assert!(error.contains("belongs in the mod's root crate"), "{error}");
+
+        // The SDK is built once with its pinned features: a local crate can't ask for others,
+        // and gets the root crate's refusal for it.
+        for request in ["features=['extra']", "default-features=false"] {
+            write_helper(&format!(
+                "horizon-mod-api={{path='../../../.horizon/sdk/api/crates/horizon-mod-api',{request}}}"
+            ));
+            let error = rewrite("src/crates/helper").0.unwrap_err();
+            assert_eq!(
+                error,
+                crate::native_mods::Refusal::Features {
+                    mod_id: bundle.manifest.id.clone()
+                }
+                .to_string()
+            );
+        }
+
+        // A proc macro runs on the host, where the SDK's libraries don't link: refused before
+        // the build, naming the crate. One that doesn't name the SDK is fine.
+        let proc_macro = |dependencies: &str| {
+            fs::write(
+                helper.join("Cargo.toml"),
+                format!(
+                    "[package]\nname='helper'\nversion='0.1.0'\n[lib]\nproc-macro=true\n[dependencies]\n{dependencies}\n"
+                ),
+            )
+            .unwrap();
+            stage(&bundle, output.path())
+        };
+        let error =
+            proc_macro("horizon-mod-api={path='../../../.horizon/sdk/api/crates/horizon-mod-api'}")
+                .unwrap_err();
+        assert!(
+            error.starts_with("src/crates/helper: a proc-macro crate can't depend on the mod API"),
+            "{error}"
+        );
+        proc_macro("itoa='1'").unwrap();
 
         // The root crate still names its SDK from the mod's folder, and queues its local crates.
         let (named, _, todo) = rewrite("");
