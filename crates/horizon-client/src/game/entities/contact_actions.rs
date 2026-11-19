@@ -255,7 +255,9 @@ impl Game<'_> {
                 continue;
             }
             let failures = self.wasm_dispatch_failures.get();
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // `contain`, not a bare `catch_unwind`: the panic hook runs before any catch, and
+            // only a panic inside `contain` is logged instead of ending the server.
+            let outcome = horizon_client::crash::contain(|| {
                 let mut call = |game: &mut Game<'_>| {
                     game.native_contact_action(crate::game::native_hooks::ContactActionCall {
                         dimension,
@@ -275,7 +277,7 @@ impl Game<'_> {
                 } else {
                     mod_api::run_transaction(self, |game, _| call(game))
                 }
-            }));
+            });
             match outcome {
                 Ok(Ok(())) => {
                     if swept.keep(self, entity) {
@@ -285,12 +287,7 @@ impl Game<'_> {
                 Ok(Err(())) => log::error!(
                     "a contact action at {pos:?}: its writes were rolled back after a wasm dispatch failure"
                 ),
-                Err(payload) => {
-                    let panic = payload
-                        .downcast_ref::<&str>()
-                        .map(|text| (*text).to_owned())
-                        .or_else(|| payload.downcast_ref::<String>().cloned())
-                        .unwrap_or_else(|| "box".to_owned());
+                Err(panic) => {
                     log::error!(
                         "a contact action at {pos:?}: its writes were rolled back after a native mod panicked: {panic}"
                     );
@@ -346,7 +343,7 @@ impl Game<'_> {
         let mut queued = Vec::new();
         for (moment, state, pos) in contacts {
             let mut actions = Vec::new();
-            let asked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match moment {
+            let asked = horizon_client::crash::contain(|| match moment {
                 mod_api::ContactMoment::Inside => {
                     self.native_client_entity_inside(
                         crate::game::native_hooks::ClientEntityInsideCall {
@@ -367,7 +364,7 @@ impl Game<'_> {
                         },
                     );
                 }
-            }));
+            });
             if asked.is_ok() {
                 horizon_client::block_contact::queue_actions(
                     &mut queued,

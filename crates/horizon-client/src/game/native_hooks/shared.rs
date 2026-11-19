@@ -1565,8 +1565,10 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
                       actions| {
             // The whole callback is staged: a panic is contained and the walk
             // keeps the caller's collector and write list as they were (arismoko/horizon#2247's
-            // rule: a mod's panic never breaks the model).
-            let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // rule: a mod's panic never breaks the model). `contain`, not a bare
+            // `catch_unwind`: the panic hook runs first, and only a panic inside `contain`
+            // is logged instead of ending the server.
+            let fired = horizon_client::crash::contain(|| {
                 HitLevel(level.reborrow()).native_entity_inside(
                     crate::game::native_hooks::fire::EntityInsideCall {
                         dimension,
@@ -1580,13 +1582,9 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
                         actions,
                     },
                 );
-            }));
-            if let Err(payload) = fired {
-                if let Some(text) = payload.downcast_ref::<&str>() {
-                    eprintln!("an entity_inside part panicked at {text:?}");
-                } else if let Some(text) = payload.downcast_ref::<String>() {
-                    eprintln!("an entity_inside part panicked at {text:?}");
-                }
+            });
+            if let Err(panic) = fired {
+                log::error!("an entity_inside part panicked: {panic}");
             }
         },
         after_fall_on_listens: |state| {
@@ -1605,7 +1603,7 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
         after_fall_on: |dimension, level, c, actions| {
             // Staged as the inside contact is: a panic is contained and queues nothing.
             let mut staged = Vec::new();
-            let fired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let fired = horizon_client::crash::contain(|| {
                 HitLevel(level.reborrow()).native_entity_after_fall_on(
                     crate::game::native_hooks::fire::EntityAfterFallOnCall {
                         dimension,
@@ -1616,10 +1614,10 @@ pub(super) const BLOCK_CONTACT_HOOKS: horizon_client::block_contact::Hooks =
                         actions: &mut staged,
                     },
                 );
-            }));
+            });
             match fired {
                 Ok(()) => actions.append(&mut staged),
-                Err(_) => eprintln!("an entity_after_fall_on part panicked"),
+                Err(panic) => log::error!("an entity_after_fall_on part panicked: {panic}"),
             }
         },
         fall_on: |dimension, level, c, distance, damage, writes| {
