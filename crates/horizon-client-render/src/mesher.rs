@@ -1488,6 +1488,77 @@ fn pi(x: i32, y: i32, z: i32) -> usize {
 const fn step_index(n: [i32; 3]) -> isize {
     (n[0] + P as i32 * n[2] + (P * P) as i32 * n[1]) as isize
 }
+/// The fluid surfaces of `cells`, blocks that stand outside any level (a screen's scene), as
+/// `FluidRenderer.tesselate` draws them in the world: corner heights, flow, the faces a
+/// neighbour hides and the overlay beside glass all read the blocks `state_at` gives (a
+/// scene's own blocks, air elsewhere). Positions come out in `cells`' coordinates. Every cell
+/// is lit full bright and left unshaded: the colour is the fluid's tint alone (water takes
+/// `water_color`), for the caller to shade and light as it draws. Cells holding no fluid give
+/// nothing. Back faces come as their own reversed quads, as in the world.
+pub fn scene_fluids(
+    tables: &MeshTables,
+    parts: &part_tables::PartTables,
+    cells: &[[i32; 3]],
+    state_at: &dyn Fn([i32; 3]) -> u32,
+    water_color: u32,
+) -> Vec<TerrainVertex> {
+    let fluid = |p: [i32; 3]| {
+        tables
+            .info
+            .get(state_at(p) as usize)
+            .is_some_and(|i| i.fluid.kind() != FluidKind::Empty)
+    };
+    let mut origins: Vec<[i32; 3]> = cells
+        .iter()
+        .filter(|p| fluid(**p))
+        .map(|p| p.map(|v| v >> 4 << 4))
+        .collect();
+    origins.sort_unstable();
+    origins.dedup();
+    let mut out = Vec::new();
+    let mut pad = Padded::default();
+    for origin in origins {
+        pad.blocks.resize(P * P * P, 0);
+        // Full bright, sky and block: the caller lights the scene.
+        pad.light.clear();
+        pad.light.resize(P * P * P, 0xFF);
+        for y in -B..16 + B {
+            for z in -B..16 + B {
+                for x in -B..16 + B {
+                    let at = [origin[0] + x, origin[1] + y, origin[2] + z];
+                    pad.blocks[pi(x, y, z)] = state_at(at);
+                }
+            }
+        }
+        let mut mesh = SectionMesh::default();
+        for cell in cells {
+            if cell.map(|v| v >> 4 << 4) != origin || !fluid(*cell) {
+                continue;
+            }
+            let local = [
+                cell[0] - origin[0],
+                cell[1] - origin[1],
+                cell[2] - origin[2],
+            ];
+            // Flat lighting (no cardinal shade) and plain colours (no emission bits).
+            fluid::tesselate(
+                tables,
+                parts,
+                (false, true, true, false, false),
+                &pad,
+                water_color,
+                &mut mesh,
+                local,
+            );
+        }
+        let at = origin.map(|v| v as f32);
+        out.extend(mesh.solid.into_iter().chain(mesh.translucent).map(|mut v| {
+            v.pos = [v.pos[0] + at[0], v.pos[1] + at[1], v.pos[2] + at[2]];
+            v
+        }));
+    }
+    out
+}
 /// Blocks and light of one section plus a `B`-block border.
 #[derive(Default)]
 struct Padded {

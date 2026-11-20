@@ -111,6 +111,10 @@ let scene = Scene::new(vec![base, rotor.in_section(1)])
   game lights models in its GUI: `min(1, (max(0, l0·n) + max(0, l1·n)) · 0.6 + 0.4)`.
 - **Biome.** `biome` names the biome whose colours tint grass, foliage and water. Without
   one, grass takes the fixed default colour.
+- **Fluids.** A block holding a fluid (water, lava, a mod's fluid, or a waterlogged block)
+  has its surface drawn as the world draws it: corner heights, flow and the faces a
+  neighbour hides all come from the blocks of its own section. Water takes the biome's
+  water colour, or vanilla's default without a biome.
 - **Breaking.** `SceneBlock::breaking(stage)` draws destroy stage 0 to 9 over the block's
   model, under its section's transform.
 - **Quads.** `Scene::quads` are drawn in the scene's depth, so blocks hide them: outlines,
@@ -145,7 +149,7 @@ returns a `SceneError`:
 
 ## Not yet
 
-- Fluids and vanilla block entities (chests, signs) in a scene's blocks are not drawn yet.
+- Vanilla block entities (chests, signs) in a scene's blocks are not drawn yet.
 - The breaking overlay is drawn with the GUI's ordinary blending, not the world's multiply.
 - Additive (glowing) particle quads and pack (Polytone) particles are not drawn in scenes.
 - A scene's blocks have no light, so a block whose animate tick reads light behaves as

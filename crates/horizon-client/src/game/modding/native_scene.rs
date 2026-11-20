@@ -29,6 +29,10 @@ pub(super) struct SceneLook<'a> {
     pub biome: Option<u16>,
 }
 
+/// Vanilla's default water colour (`Biome`'s `water_color` default, plains'), for a scene
+/// that names no biome.
+const DEFAULT_WATER: u32 = 0x3F_76E4;
+
 /// A section's transform as a matrix, when it is finite and affine (a bottom row of
 /// `0, 0, 0, 1`): what `draw_scene` takes.
 pub(super) fn section_matrix(section: &mod_api::SceneSection) -> Option<Mat4> {
@@ -443,6 +447,68 @@ impl Game<'_> {
                     q.normal = (normals * q.normal).normalize_or_zero();
                     q.colors = q.colors.map(|c| lit(c, light));
                 }
+            }
+        }
+        // Fluids: each drawn section's fluid cells meshed as the world meshes them, against
+        // that section's own blocks (air elsewhere), so heights, flow and hidden faces match.
+        let air = self.res.facts().air.0;
+        let water = match look.biome {
+            Some(id) => self.res.biomes().get(id).water & 0xFF_FFFF,
+            None => DEFAULT_WATER,
+        };
+        for (section, &(frame, normals, light, drawn)) in frames.iter().enumerate() {
+            let cells: Vec<[i32; 3]> = blocks
+                .iter()
+                .filter(|b| !sectioned || b.section == section)
+                .map(|b| b.pos)
+                .collect();
+            if !drawn || cells.is_empty() {
+                continue;
+            }
+            let state_at = |p: [i32; 3]| occupied.get(&(section, p)).map_or(air, |s| s.0);
+            let fluid = horizon_client::mesher::scene_fluids(
+                tables,
+                &self.pack.context.part_tables,
+                &cells,
+                &state_at,
+                water,
+            );
+            for q in fluid.as_chunks::<4>().0 {
+                let layer = u32::from(q[0].layer & !horizon_client::mesher::OPAQUE_LAYER);
+                let Some(sprite) = self
+                    .pack
+                    .layer_names
+                    .get(&layer)
+                    .and_then(|name| self.gui.atlas.sprites.get(name))
+                else {
+                    continue;
+                };
+                let corners = q.each_ref().map(|v| frame.transform_point3(Vec3::from_array(v.pos)));
+                let flat = q.each_ref().map(|v| Vec3::from_array(v.pos));
+                let normal = (flat[1] - flat[0]).cross(flat[2] - flat[0]).normalize_or_zero();
+                let color = q[0].color;
+                // Face shading is baked before the light, as for block faces.
+                let (color, shade) = match look.shading {
+                    mod_api::SceneShading::View { .. } => (color, Shade::Normal),
+                    _ => (
+                        shaded(color, face_shade((normals * normal).normalize_or_zero())),
+                        Shade::Baked,
+                    ),
+                };
+                quads.push(SceneQuad {
+                    corners,
+                    uv: q.each_ref().map(|v| {
+                        let [u, w] = v.uv();
+                        [
+                            sprite.u0 + u * (sprite.u1 - sprite.u0),
+                            sprite.v0 + w * (sprite.v1 - sprite.v0),
+                        ]
+                    }),
+                    colors: [lit(color, light); 4],
+                    normal: (normals * normal).normalize_or_zero(),
+                    cull: true,
+                    shade,
+                });
             }
         }
         // The scene's own quads: outlines, shadows, flashes.

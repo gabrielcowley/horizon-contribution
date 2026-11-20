@@ -625,3 +625,48 @@ fn a_scene_in_sections_keeps_its_particles_when_its_blocks_change() {
         }
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn water_is_meshed_against_its_own_section_and_tinted_by_the_biome() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let water = mod_api::SceneBlock::new([0, 0, 0], block(game, "minecraft:water"), None);
+        let alone = drawn(game, &Scene::new(vec![water.clone()]));
+        assert!(!alone.is_empty(), "a water source is drawn");
+        // Every corner samples the water's own sprites in the GUI atlas.
+        let sprites = &game.gui.atlas.sprites;
+        let water_sprites: Vec<_> = ["block/water_still", "block/water_flow"]
+            .iter()
+            .map(|name| sprites.get(*name).copied().expect(name))
+            .collect();
+        for v in &alone {
+            assert!(
+                water_sprites.iter().any(|r| (r.u0..=r.u1).contains(&v.uv[0])
+                    && (r.v0..=r.v1).contains(&v.uv[1])),
+                "a corner at {:?} lies outside the water's sprites",
+                v.uv
+            );
+        }
+        let glass = mod_api::SceneBlock::new([1, 0, 0], block(game, "minecraft:stone"), None);
+        let sections = vec![SceneSection::new(), SceneSection::new()];
+        let together = drawn(
+            game,
+            &Scene::new(vec![water.clone(), glass.clone()]).with_sections(sections.clone()),
+        );
+        let apart = drawn(
+            game,
+            &Scene::new(vec![water.clone(), glass.in_section(1)]).with_sections(sections),
+        );
+        assert!(
+            apart.len() > together.len(),
+            "the stone hides the water's east side only when they share a section"
+        );
+        let swamp = drawn(
+            game,
+            &Scene::new(vec![water])
+                .with_biome(mod_api::Identifier::parse("minecraft:swamp").unwrap()),
+        );
+        assert_eq!(alone.len(), swamp.len());
+        assert!(alone.iter().zip(&swamp).any(|(a, b)| a.color != b.color), "swamp water");
+    });
+}
