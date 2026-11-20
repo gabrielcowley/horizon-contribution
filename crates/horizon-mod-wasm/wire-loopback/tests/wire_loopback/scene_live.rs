@@ -103,16 +103,38 @@ fn asks(
     ])
     .with_sections(vec![
         SceneSection::new(),
-        SceneSection::new().transformed(lifted).lit(9, 4).drawn(false),
+        SceneSection::new()
+            .transformed(lifted)
+            .lit(9, 4)
+            .drawn(false),
     ])
     .with_quads(vec![
-        SceneQuad::new([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0]], 0x80FF_FFFF)
-            .colored([0xFF00_0000, 0xFFFF_0000, 0xFF00_FF00, 0xFF00_00FF])
-            .sprite("ponder:white", [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]])
-            .in_section(1)
-            .shaded(true)
-            .culled(true),
-        SceneQuad::new([[-1.0, 0.0, -1.0], [-1.0, 0.0, 2.0], [2.0, 0.0, 2.0], [2.0, 0.0, -1.0]], 0x4000_0000),
+        SceneQuad::new(
+            [
+                [0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+            ],
+            0x80FF_FFFF,
+        )
+        .colored([0xFF00_0000, 0xFFFF_0000, 0xFF00_FF00, 0xFF00_00FF])
+        .sprite(
+            "ponder:white",
+            [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
+        )
+        .in_section(1)
+        .shaded(true)
+        .culled(true),
+        SceneQuad::new(
+            [
+                [-1.0, 0.0, -1.0],
+                [-1.0, 0.0, 2.0],
+                [2.0, 0.0, 2.0],
+                [2.0, 0.0, -1.0],
+            ],
+            0x4000_0000,
+        ),
     ])
     .with_shading(SceneShading::View {
         lights: [[0.4, -1.0, 0.7], [-0.4, -0.5, 0.7]],
