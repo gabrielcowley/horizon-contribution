@@ -155,6 +155,7 @@ fn a_scene_starts_over_when_its_blocks_change() {
             entity: None,
             section: 0,
             breaking: None,
+            game_data: None,
         }]
     };
     assert_eq!(scene_key(&blocks(5)), scene_key(&blocks(5)));
@@ -670,3 +671,31 @@ fn water_is_meshed_against_its_own_section_and_tinted_by_the_biome() {
         assert!(alone.iter().zip(&swamp).any(|(a, b)| a.color != b.color), "swamp water");
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn game_block_entities_are_drawn_by_their_renderers_with_their_saved_data() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        // A chest has no block model: without its renderer the scene draws nothing.
+        let chest = mod_api::SceneBlock::new([0, 0, 0], block(game, "minecraft:chest"), None);
+        assert!(!drawn(game, &Scene::new(vec![chest])).is_empty(), "the chest is drawn");
+
+        let sign = mod_api::SceneBlock::new([0, 0, 0], block(game, "minecraft:oak_sign"), None);
+        let blank = drawn(game, &Scene::new(vec![sign.clone()])).len();
+        let mut text = Compound::new();
+        let mut front = Compound::new();
+        front.insert(
+            "messages".into(),
+            mod_api::Tag::List(
+                ["\"Create\"", "\"\"", "\"\"", "\"\""]
+                    .iter()
+                    .map(|line| mod_api::Tag::String((*line).into()))
+                    .collect(),
+            ),
+        );
+        text.insert("front_text".into(), mod_api::Tag::Compound(front));
+        let written = drawn(game, &Scene::new(vec![sign.with_game_data(text)])).len();
+        assert!(written > blank, "the sign's text is drawn ({written} > {blank})");
+    });
+}
+

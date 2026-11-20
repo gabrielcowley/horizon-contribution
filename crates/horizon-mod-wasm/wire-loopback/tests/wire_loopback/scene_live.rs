@@ -48,6 +48,18 @@ const REFUSALS: [Result<(), SceneError>; 20] = [
     Ok(()),
 ];
 
+/// A sign's saved text, as a world saves it.
+fn sign_text() -> Compound {
+    let mut front = Compound::new();
+    front.insert(
+        "messages".into(),
+        mod_api::Tag::List(vec![mod_api::Tag::String("Create".into()); 4]),
+    );
+    let mut data = Compound::new();
+    data.insert("front_text".into(), mod_api::Tag::Compound(front));
+    data
+}
+
 /// What a guide page draws: a scene of blocks alone, then a living one with each part (a
 /// block, an entity by type with data, one of the level, a particle and a clock) on each
 /// clock id, each answered with its refusal.
@@ -83,7 +95,11 @@ fn asks(
     ];
     let sectioned = Scene::new(vec![
         blocks[0].clone(),
-        blocks[1].clone().in_section(1).breaking(6),
+        blocks[1]
+            .clone()
+            .in_section(1)
+            .breaking(6)
+            .with_game_data(sign_text()),
     ])
     .with_sections(vec![
         SceneSection::new(),
@@ -238,6 +254,7 @@ fn a_wasm_mods_scene_crosses_whole_with_each_part_and_each_refusal_comes_back() 
         assert_eq!(draw.0[1].1.sections.len(), 2);
         assert_eq!(draw.0[1].1.quads.len(), 2);
         assert_eq!(draw.0[1].1.blocks[1].breaking, Some(6));
+        assert_eq!(draw.0[1].1.blocks[1].game_data, Some(sign_text()));
         assert_eq!(draw.0[2].1.blocks.len(), 2);
         assert_eq!(draw.0[2].1.entities.len(), 2);
         assert_eq!(draw.0[2].1.particles.len(), 1);

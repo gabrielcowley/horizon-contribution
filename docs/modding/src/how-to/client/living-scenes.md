@@ -115,6 +115,13 @@ let scene = Scene::new(vec![base, rotor.in_section(1)])
   has its surface drawn as the world draws it: corner heights, flow and the faces a
   neighbour hides all come from the blocks of its own section. Water takes the biome's
   water colour, or vanilla's default without a biome.
+- **Game block entities.** A block whose state has one of the game's block entity
+  renderers (a chest, a sign, a banner, a skull, a bell, a lectern's book…) is drawn by that
+  renderer, as in the world, through its section. `SceneBlock::with_game_data` gives it the
+  saved data a world would load (a sign's `front_text`, a banner's `patterns`); without it
+  the type's defaults are drawn, such as a blank sign. The `id` may be left out: the block's
+  own type is used. Nothing in a scene ticks, so chests stay shut. A player head draws its
+  default skin.
 - **Breaking.** `SceneBlock::breaking(stage)` draws destroy stage 0 to 9 over the block's
   model, under its section's transform.
 - **Quads.** `Scene::quads` are drawn in the scene's depth, so blocks hide them: outlines,
@@ -149,7 +156,6 @@ returns a `SceneError`:
 
 ## Not yet
 
-- Vanilla block entities (chests, signs) in a scene's blocks are not drawn yet.
 - The breaking overlay is drawn with the GUI's ordinary blending, not the world's multiply.
 - Additive (glowing) particle quads and pack (Polytone) particles are not drawn in scenes.
 - A scene's blocks have no light, so a block whose animate tick reads light behaves as

@@ -51,6 +51,7 @@ pub(in crate::game) fn scene_blocks(
                 entity: block.entity.as_ref(),
                 section: block.section as usize,
                 breaking: block.breaking.filter(|stage| *stage <= 9),
+                game_data: block.game_data.as_ref(),
             })
         })
         .collect()

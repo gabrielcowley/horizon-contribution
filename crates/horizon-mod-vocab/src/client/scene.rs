@@ -1,6 +1,6 @@
 //! Owned drawing data for a screen scene, separate from live world entities.
 
-use crate::{BlockState, Identifier, item::containers::ModBlockEntityFields};
+use crate::{BlockState, Compound, Identifier, item::containers::ModBlockEntityFields};
 
 /// A mod block entity's type and public fields supplied to a screen's drawing Part.
 /// This is not a live entity: internal cache and revision identities never cross the API.
@@ -42,6 +42,13 @@ pub struct SceneBlock {
     /// How far the block is broken: destroy stage 0 to 9, drawn over its model as the world
     /// draws a block being mined. Past 9 draws no overlay.
     pub breaking: Option<u8>,
+    /// The saved data of the game's own block entity at this block (a sign's text, a
+    /// banner's patterns, a lectern's book), as a world loads it. A block whose state has a
+    /// game block entity with a renderer (a chest, a sign, a banner, a skull, a bell…) is
+    /// drawn by that renderer as in the world, with this data, or with the type's defaults
+    /// without it. Nothing in a scene ticks, so a chest stays shut. Ignored when `entity`
+    /// is set.
+    pub game_data: Option<Compound>,
 }
 
 impl SceneBlock {
@@ -53,7 +60,13 @@ impl SceneBlock {
             entity,
             section: 0,
             breaking: None,
+            game_data: None,
         }
+    }
+    /// The same block with its game block entity's saved data.
+    pub fn with_game_data(mut self, data: Compound) -> Self {
+        self.game_data = Some(data);
+        self
     }
     /// The same block in section `section`.
     pub fn in_section(mut self, section: u32) -> Self {

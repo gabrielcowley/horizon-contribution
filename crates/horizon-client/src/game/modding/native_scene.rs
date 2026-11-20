@@ -6,7 +6,9 @@
 use super::Game;
 use super::native_block_entity_draw::{BlockEntityDraw, place_turning};
 use glam::{Mat3, Mat4, Vec3};
-use horizon_client::{block_entity_render::diffuse_lights, hud::HudBatch, mesher::Vertex};
+use horizon_client::{
+    block_entity_render::diffuse_lights, containers::BlockEntity, hud::HudBatch, mesher::Vertex,
+};
 use horizon_world::level::data::state_flags;
 use mod_api::SceneView;
 /// Prepared scene data. Entity fields remain borrowed for the duration of the draw.
@@ -18,6 +20,8 @@ pub(super) struct SceneBlock<'a> {
     pub section: usize,
     /// Destroy stage 0 to 9 drawn over it, or none.
     pub breaking: Option<u8>,
+    /// Its game block entity's saved data, or none for the type's defaults.
+    pub game_data: Option<&'a mod_api::Compound>,
 }
 
 /// What a scene draws besides its blocks, checked: its sections (empty for one in place,
@@ -200,6 +204,48 @@ fn crack_uv(position: [f32; 3], facing: [i32; 3]) -> [f32; 2] {
 }
 
 impl Game<'_> {
+    /// A small level of `blocks` with the game block entities their saved data gives (a
+    /// block with no data gets none): what the game's block entity renderers read in a scene,
+    /// a chest its neighbour, a sign its text.
+    fn scene_entity_level<'b>(
+        &self,
+        blocks: impl Iterator<Item = &'b SceneBlock<'b>>,
+    ) -> horizon_client::world::World {
+        use horizon_core::nbt::Tag;
+        let mut world = horizon_client::world::World::new(self.res.facts().air, 0);
+        for b in blocks {
+            let at = (b.pos[0] >> 4, b.pos[2] >> 4);
+            if world.chunks.get(&at).is_none() {
+                world.chunks.insert(
+                    at,
+                    std::sync::Arc::new(horizon_client::chunk::Chunk::empty(at.0, at.1)),
+                );
+            }
+            world.set_stored(b.pos[0], b.pos[1], b.pos[2], b.state);
+            let Some(data) = b.game_data else {
+                continue;
+            };
+            let name = &*self.res.facts().get(b.state).name;
+            let mut tag = data.clone();
+            for (key, v) in ["x", "y", "z"].into_iter().zip(b.pos) {
+                tag.insert(key.into(), Tag::Int(v));
+            }
+            // Saved data from a world names its type; a mod's may leave it to the block.
+            if !tag.contains_key(&horizon_core::nbt::JavaString::from("id"))
+                && let Some(id) = horizon_client::block_entity_types::type_for(name)
+                    .or_else(|| horizon_client::lan::chunks::block_entity_type(name))
+            {
+                tag.insert("id".into(), Tag::String(id.into()));
+            }
+            if let Some((_, entity)) =
+                horizon_client::save::decode_block_entity_for_block(&Tag::Compound(tag), name)
+            {
+                world.block_entities.insert((b.pos[0], b.pos[1], b.pos[2]), entity);
+            }
+        }
+        world
+    }
+
     /// The colour (ABGR) packed light `light` gives, as the client's lightmap lights the
     /// world this frame: block light in bits 8..16 and sky light in bits 0..8, each 16
     /// times its level. Full bright is white, so a scene that never sets a light draws as
@@ -509,6 +555,95 @@ impl Game<'_> {
                     cull: true,
                     shade,
                 });
+            }
+        }
+        // The game's own block entities (chests, signs, banners…), drawn by their renderers as
+        // in the world, against a small level of their section's blocks holding the saved data
+        // each block gives, nothing ticking. A mod's block entity keeps its own path above.
+        let renderer = self.res.block_entity_render();
+        let game_entities = |section: usize| {
+            blocks.iter().filter(move |b| {
+                (!sectioned || b.section == section)
+                    && b.entity.is_none()
+                    && renderer.renders(b.state.0)
+            })
+        };
+        for (section, &(frame, normals, light, drawn)) in frames.iter().enumerate() {
+            if !drawn || game_entities(section).next().is_none() {
+                continue;
+            }
+            let world = self.scene_entity_level(
+                blocks.iter().filter(|b| !sectioned || b.section == section),
+            );
+            let sign = |p: [i32; 3]| match world.block_entities.get(&(p[0], p[1], p[2])) {
+                Some(BlockEntity::Sign(sign)) => Some(sign),
+                _ => None,
+            };
+            let banner = |p: [i32; 3]| match world.block_entities.get(&(p[0], p[1], p[2])) {
+                Some(BlockEntity::Banner(b)) => {
+                    super::banners::layer_textures(&self.stations().banners, &b.layers)
+                }
+                _ => Vec::new(),
+            };
+            let scene = horizon_client::block_entity_render::Scene {
+                camera: glam::DVec3::ZERO,
+                spyglass_outline: false,
+                orientation: glam::Quat::IDENTITY,
+                anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
+                texts: None,
+                partial: self.clock.fraction() as f32,
+                game_time: self.world.game_time,
+                max_y: world.shape.max_y() - 1,
+                world: &world,
+                sprites: &self.gui.atlas.sprites,
+                emissive: &self.gui.atlas.emissive,
+                translucent_sprites: &self.gui.atlas.translucent,
+                atlas_revision: self.gui.atlas.revision,
+                nether: false,
+                lid: &|_: [i32; 3]| 0.0,
+                sign: &sign,
+                banner: &banner,
+                skull: &|_| None,
+                glyph: &|c| self.gui.atlas.glyph_cell(c),
+                glyphs: self.gui.atlas.font.epoch(),
+                font: Some(&self.gui.atlas.font),
+                dynamic_visible: None,
+            };
+            let mut placed: Vec<Vertex> = Vec::new();
+            for block in game_entities(section) {
+                placed.clear();
+                let at = Vec3::new(block.pos[0] as f32, block.pos[1] as f32, block.pos[2] as f32);
+                // Full bright: the section's light is applied below, as to its blocks.
+                renderer.render_block(
+                    &scene,
+                    block.pos,
+                    block.state.0,
+                    Mat4::from_translation(at),
+                    0xFF,
+                    &mut placed,
+                );
+                // Sign text's new glyphs upload with this screen's batch.
+                batch.patches.append(&mut self.text_patches.borrow_mut());
+                for q in placed.as_chunks::<4>().0 {
+                    let flat = q.each_ref().map(|v| Vec3::from_array(v.pos));
+                    let [nx, ny, nz, w] = q[0].normal;
+                    let mut normal = (flat[1] - flat[0]).cross(flat[2] - flat[0]).normalize_or_zero();
+                    if normal == Vec3::ZERO {
+                        normal = Vec3::new(f32::from(nx), f32::from(ny), f32::from(nz))
+                            .normalize_or_zero();
+                    }
+                    // `entity.wgsl`: |w| >= 0.5 is shaded by the normal; smaller keeps the
+                    // colour baked in.
+                    let unbaked = w.unsigned_abs() >= 64;
+                    quads.push(SceneQuad {
+                        corners: flat.map(|c| frame.transform_point3(c)),
+                        uv: q.each_ref().map(|v| v.uv),
+                        colors: [lit(q[0].color, light); 4],
+                        normal: (normals * normal).normalize_or_zero(),
+                        cull: horizon_client::mesher::culls_back(q[0].normal),
+                        shade: if unbaked { Shade::Normal } else { Shade::Baked },
+                    });
+                }
             }
         }
         // The scene's own quads: outlines, shadows, flashes.
