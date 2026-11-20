@@ -2059,7 +2059,8 @@ impl Game<'_> {
     /// Sets a block in the current authoritative level through `Level.setBlock`.
     /// Returns false for another dimension, an invalid state, or no change.
     /// `flags` selects vanilla's neighbour, shape and client updates. A block
-    /// entity block gets its block entity.
+    /// entity block gets its block entity. Inside a transaction the write is
+    /// journaled (`journal_mod_block`): an abort puts the old block back.
     pub(super) fn native_set_block(
         &mut self,
         dimension: &str,
@@ -2070,8 +2071,12 @@ impl Game<'_> {
         if (self.serving.is_none() && self.options.dedicated.is_none())
             || dimension != self.dim.id()
             || self.pack.assets.registry.state(state).is_none()
+            || !self.world.is_loaded_at(pos[0], pos[1], pos[2])
         {
             return false;
+        }
+        if let Some(changed) = self.journal_mod_block(pos, state, flags) {
+            return changed;
         }
         let changed =
             self.with_level(|_, level, ticks| level.native_set_block(ticks, pos, state, flags));

@@ -4413,6 +4413,10 @@ impl Game<'_> {
         let Some(id) = property_change(self.pack.assets.registry, state, key, value) else {
             return false;
         };
+        // Inside a transaction, journaled as `native_set_block` is.
+        if let Some(changed) = self.journal_mod_block(pos, id, flags) {
+            return changed;
+        }
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
         self.with_level(|b, level, ticks| b.set_block(level, ticks, at, id, flags))
     }

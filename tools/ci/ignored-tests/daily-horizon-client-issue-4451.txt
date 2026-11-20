@@ -2520,6 +2520,7 @@ horizon-client game::transactions::mod_capability_tests::a_chemical_moves_betwee
 horizon-client game::transactions::mod_capability_tests::entity_and_player_attachments_stay_on_commit_and_go_back_on_abort lib daily resources
 horizon-client game::transactions::player_tests::nested_player_turns_preserve_binding_and_rollback_whole_membership lib daily resources
 horizon-client game::transactions::player_tests::retained_player_records_and_save_snapshots_do_not_keep_residency lib daily resources
+horizon-client game::transactions::tests::a_mods_block_writes_go_back_on_abort_and_stay_on_commit lib daily resources
 horizon-client game::transactions::tests::a_menu_write_outside_a_transaction_keeps_no_journal lib daily resources
 horizon-client game::transactions::tests::an_aborted_transaction_puts_back_what_it_and_its_committed_children_changed lib daily resources
 horizon-client game::transactions::tests::cauldron_effects_wait_for_root_and_abort_with_inventory lib daily resources

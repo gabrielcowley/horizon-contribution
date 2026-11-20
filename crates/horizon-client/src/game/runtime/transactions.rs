@@ -106,6 +106,10 @@ pub(super) struct Level {
     slots: HashMap<(Pos, usize), KeptSlot>,
     /// Each block's state before this transaction first wrote it.
     blocks: HashMap<Pos, BlockStateId>,
+    /// The `Level.setBlock` flags of the last mod write to each block (`journal_mod_block`):
+    /// the root commit sets the block with them, and makes a mod block's block entity, where
+    /// a block without an entry gets the game's own `UPDATE_ALL`.
+    mod_block_flags: HashMap<Pos, i32>,
     /// Composter-local random streams before this depth first evaluated their layers.
     composter_randoms: ComposterRandoms,
     /// Each quart cell before this transaction first wrote it.
@@ -487,6 +491,8 @@ impl Game<'_> {
                 for (pos, state) in level.blocks {
                     outer.blocks.entry(pos).or_insert(state);
                 }
+                // The child wrote last: its flags stand.
+                outer.mod_block_flags.extend(level.mod_block_flags);
                 for (chunk, randoms) in level.composter_randoms {
                     let kept = outer.composter_randoms.entry(chunk).or_default();
                     for (pos, random) in randoms {
@@ -908,6 +914,28 @@ impl Game<'_> {
         level.after.push(After::Block(key));
         self.world.set_stored(pos[0], pos[1], pos[2], state)
     }
+    /// A mod's `Level.setBlock(pos, state, flags)` inside a transaction: stored only, keeping
+    /// the old state for an abort, and set with `flags` (and a mod block's block entity) at the
+    /// root commit. Until then the old block entity stays and the new block's isn't made.
+    /// `None` outside a transaction, where the caller writes at once; `Some(false)` for an
+    /// unchanged state, as `Level.setBlock` refuses one.
+    pub(in crate::game) fn journal_mod_block(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        flags: i32,
+    ) -> Option<bool> {
+        let level = self.transactions.last_mut()?;
+        let key = (pos[0], pos[1], pos[2]);
+        let old = self.world.block(pos[0], pos[1], pos[2]);
+        if old == state {
+            return Some(false);
+        }
+        level.blocks.entry(key).or_insert(old);
+        level.mod_block_flags.insert(key, flags);
+        level.after.push(After::Block(key));
+        Some(self.world.set_stored(pos[0], pos[1], pos[2], state))
+    }
     /// Keep the original cell without publishing the tentative write.
     pub(in crate::game) fn journal_biome(&mut self, pos: [i32; 3], old: u16) {
         if let Some(level) = self.transactions.last_mut() {
@@ -1044,7 +1072,18 @@ impl Game<'_> {
                     if now != was {
                         // The stored state back, so the one real write sees the change.
                         self.world.set_stored(pos.0, pos.1, pos.2, was);
-                        let _ = self.level_set([pos.0, pos.1, pos.2], now);
+                        let at = [pos.0, pos.1, pos.2];
+                        match level.mod_block_flags.get(&pos) {
+                            Some(&flags) => {
+                                self.with_level(|_, level, ticks| {
+                                    level.native_set_block(ticks, at, now, flags)
+                                });
+                                let _ = self.process_level_events();
+                            }
+                            None => {
+                                let _ = self.level_set(at, now);
+                            }
+                        }
                     }
                 }
                 After::Biome(key) if !biome_columns.insert(key) => {}
@@ -2390,6 +2429,56 @@ mod tests {
             assert_eq!(slots(&game, (2, 64, 4)), moved, "{id}");
             assert!(game.transactions.is_empty());
         }
+    }
+
+    /// A mod's block writes (`set_block`, `set_block_property`, `remove_block`) in a
+    /// transaction: seen inside it, put back by an abort (as a panic's unwind aborts), even
+    /// after a child committed them, and set for good at the root commit.
+    #[test]
+    #[ignore = "daily"]
+    fn a_mods_block_writes_go_back_on_abort_and_stay_on_commit() {
+        super::super::native_entity_refs::tests::with_game(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let level = game.level(game.dim.id()).unwrap();
+            let registry = game.pack.assets.registry;
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            let glowstone = registry.default_state("minecraft:glowstone").unwrap();
+            let log = registry.default_state("minecraft:oak_log").unwrap();
+            let flags = BlockUpdateFlags::CLIENTS;
+            for x in [0, 2, 4] {
+                assert_eq!(game.level_set_block(level, [x, 64, 0], stone, flags), Ok(true));
+            }
+            assert_eq!(game.level_set_block(level, [6, 64, 0], log, flags), Ok(true));
+            let at = |game: &Game<'_>, x| game.world.block(x, 64, 0);
+
+            let aborted = game.transaction(|game, _| {
+                assert_eq!(game.level_set_block(level, [0, 64, 0], glowstone, flags), Ok(true));
+                assert_eq!(at(game, 0), glowstone, "the write is seen inside");
+                game.transaction(|game, _| {
+                    assert!(game.level_remove_block(level, [2, 64, 0], false));
+                    assert!(game.set_block_property_with([6, 64, 0], "axis", "x", 3));
+                    Ok::<_, ()>(())
+                })?;
+                Err::<(), ()>(())
+            });
+            assert_eq!(aborted, Err(()));
+            assert_eq!(
+                [at(game, 0), at(game, 2), at(game, 6)],
+                [stone, stone, log],
+                "the abort put back what it and its committed child wrote"
+            );
+
+            let committed = game.transaction(|game, _| {
+                assert_eq!(game.level_set_block(level, [4, 64, 0], glowstone, flags), Ok(true));
+                Ok::<_, ()>(())
+            });
+            assert_eq!(committed, Ok(()));
+            assert_eq!(at(game, 4), glowstone);
+            assert!(game.transactions.is_empty());
+        });
     }
 }
 

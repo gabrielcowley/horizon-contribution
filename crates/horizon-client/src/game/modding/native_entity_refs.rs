@@ -453,7 +453,9 @@ impl Game<'_> {
         }
         Ok(self.native_set_block(level.dimension_id(), pos, state, flags.bits()))
     }
-    /// Remove a block in place (`Level.removeBlock`), preserving its fluid.
+    /// Remove a block in place (`Level.removeBlock`), preserving its fluid. Inside a
+    /// transaction, journaled as `native_set_block` is, with the replacement and flags
+    /// `Level.removeBlock` would use.
     pub(super) fn level_remove_block(
         &mut self,
         level: LevelRef,
@@ -462,6 +464,19 @@ impl Game<'_> {
     ) -> bool {
         if !self.native_level_write_allowed(level, pos) || self.dim.key() != level.dimension() {
             return false;
+        }
+        if !self.transactions.is_empty() {
+            use horizon_world::level::LevelAccess;
+            let at = horizon_core::position::BlockPos::new(pos[0], pos[1], pos[2]);
+            let state = self.world.block(pos[0], pos[1], pos[2]);
+            let replacement = self.with_level(|b, level, _| {
+                let legacy = b.legacy_block(b.fluid(state));
+                level.adjust_remove_block(at, state, moved, legacy)
+            });
+            let flags = 3 | if moved { 64 } else { 0 };
+            return self
+                .journal_mod_block(pos, replacement, flags)
+                .unwrap_or(false);
         }
         let changed =
             self.with_level(|_, level, ticks| level.remove_block_write(ticks, pos, moved));
