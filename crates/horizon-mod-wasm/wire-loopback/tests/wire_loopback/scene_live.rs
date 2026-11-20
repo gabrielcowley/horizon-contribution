@@ -2,7 +2,7 @@ use super::*;
 use mod_api::BlockMetadata as _;
 use mod_api::{
     BlockState, Compound, DrawContext, EntityRef, GuiEntity, Scene, SceneBlock, SceneClock,
-    SceneEntity, SceneError, SceneParticle, SceneView,
+    SceneEntity, SceneError, SceneParticle, SceneQuad, SceneSection, SceneShading, SceneView,
 };
 
 /// A screen's drawing that keeps each scene it is asked to draw and answers with the
@@ -25,7 +25,7 @@ impl DrawContext for Draw {
 }
 
 /// The answer for each clock id.
-const REFUSALS: [Result<(), SceneError>; 16] = [
+const REFUSALS: [Result<(), SceneError>; 20] = [
     Ok(()),
     Err(SceneError::Unavailable),
     Err(SceneError::BadView),
@@ -41,6 +41,10 @@ const REFUSALS: [Result<(), SceneError>; 16] = [
     Err(SceneError::BadParticle { index: 4 }),
     Err(SceneError::BadClock),
     Err(SceneError::NoClock),
+    Err(SceneError::BadSection { index: 7 }),
+    Err(SceneError::TooManyQuads),
+    Err(SceneError::BadQuad { index: 2 }),
+    Err(SceneError::BadBiome),
     Ok(()),
 ];
 
@@ -72,7 +76,36 @@ fn asks(
         [0.5, 1.25, 0.5],
         [0.0, 0.0625, -0.125],
     )];
-    let mut asks = vec![(rect, Scene::new(blocks.clone()), view, Ok(()))];
+    // A scene in sections: a block moved, dimmed and broken in the second, an outline quad
+    // on a sprite in it and a plain one in the scene's frame, Ponder's shading and biome.
+    let lifted = [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.25, 0.5, -0.75, 1.0,
+    ];
+    let sectioned = Scene::new(vec![
+        blocks[0].clone(),
+        blocks[1].clone().in_section(1).breaking(6),
+    ])
+    .with_sections(vec![
+        SceneSection::new(),
+        SceneSection::new().transformed(lifted).lit(9, 4).drawn(false),
+    ])
+    .with_quads(vec![
+        SceneQuad::new([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0], [1.0, 0.0, 0.0]], 0x80FF_FFFF)
+            .colored([0xFF00_0000, 0xFFFF_0000, 0xFF00_FF00, 0xFF00_00FF])
+            .sprite("ponder:white", [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]])
+            .in_section(1)
+            .shaded(true)
+            .culled(true),
+        SceneQuad::new([[-1.0, 0.0, -1.0], [-1.0, 0.0, 2.0], [2.0, 0.0, 2.0], [2.0, 0.0, -1.0]], 0x4000_0000),
+    ])
+    .with_shading(SceneShading::View {
+        lights: [[0.4, -1.0, 0.7], [-0.4, -0.5, 0.7]],
+    })
+    .with_biome(mod_api::Identifier::parse("minecraft:plains").unwrap());
+    let mut asks = vec![
+        (rect, Scene::new(blocks.clone()), view, Ok(())),
+        (rect, sectioned, view, Ok(())),
+    ];
     for (id, answer) in (0u32..).zip(REFUSALS) {
         let clock = SceneClock::new(id, 40 + u64::from(id), 0.375).animate_blocks(id % 2 == 0);
         let scene = Scene::new(blocks.clone())
@@ -196,14 +229,18 @@ fn a_wasm_mods_scene_crosses_whole_with_each_part_and_each_refusal_comes_back() 
         guest::set_transport(None);
         drop(cx);
         // Every named refusal came back as itself, and the host was handed exactly what
-        // the guest drew: blocks, both entities, the particle and the clock.
-        let mut expected = vec![Ok(())];
+        // the guest drew: blocks, both entities, the particle and the clock; and the
+        // sections, quads, shading and biome of the scene in sections.
+        let mut expected = vec![Ok(()), Ok(())];
         expected.extend(REFUSALS);
         assert_eq!(answers, expected);
-        assert_eq!(draw.0.len(), 17);
-        assert_eq!(draw.0[1].1.blocks.len(), 2);
-        assert_eq!(draw.0[1].1.entities.len(), 2);
-        assert_eq!(draw.0[1].1.particles.len(), 1);
+        assert_eq!(draw.0.len(), 22);
+        assert_eq!(draw.0[1].1.sections.len(), 2);
+        assert_eq!(draw.0[1].1.quads.len(), 2);
+        assert_eq!(draw.0[1].1.blocks[1].breaking, Some(6));
+        assert_eq!(draw.0[2].1.blocks.len(), 2);
+        assert_eq!(draw.0[2].1.entities.len(), 2);
+        assert_eq!(draw.0[2].1.particles.len(), 1);
         assert_eq!(draw.0, sent);
     });
 }

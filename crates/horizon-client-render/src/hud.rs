@@ -863,6 +863,11 @@ pub fn dump_atlas(
 }
 
 impl HudAtlas {
+    /// The middle of the atlas's white texel: the UV a plain-colour quad samples.
+    pub fn white_uv(&self) -> [f32; 2] {
+        let w = self.white;
+        [(w.u0 + w.u1) / 2.0, (w.v0 + w.v1) / 2.0]
+    }
     /// `TextureAtlas.dumpContents` for this atlas: `dir` is `screenshots/debug`,
     /// the folder `TextureUtil.getDebugTexturePath` names.
     pub fn dump_contents(&self, dir: &Path, name: &str) -> std::io::Result<PathBuf> {
@@ -1984,11 +1989,15 @@ impl HudBatch {
         }
     }
     pub fn quad_3d(&mut self, p: [[f32; 3]; 4], uv: [[f32; 2]; 4], color: u32) {
+        self.quad_3d_colors(p, uv, [color; 4]);
+    }
+    /// [`Self::quad_3d`] with a colour per corner, run between them.
+    pub fn quad_3d_colors(&mut self, p: [[f32; 3]; 4], uv: [[f32; 2]; 4], colors: [u32; 4]) {
         for i in [0, 1, 2, 0, 2, 3] {
             self.vertices.push(HudVertex {
                 pos: [p[i][0], p[i][1]],
                 uv: uv[i],
-                color,
+                color: colors[i],
                 depth: p[i][2],
                 glint_uv: [0.0, 0.0],
                 text: 0,

@@ -9,7 +9,7 @@
 use super::api_values::TryIntoEngine as _;
 use super::{
     Game,
-    native_scene::{SceneBlock, SceneQuad, face_shade, shaded},
+    native_scene::{SceneBlock, SceneLook, SceneQuad, face_shade, shaded},
 };
 use glam::{DVec3, Quat, Vec3};
 use horizon_client::{
@@ -213,6 +213,7 @@ impl Game<'_> {
         batch: &mut HudBatch,
         rect: [f32; 4],
         blocks: &[SceneBlock<'_>],
+        look: &SceneLook<'_>,
         scene: &Scene,
         view: SceneView,
     ) -> Result<(), SceneError> {
@@ -220,7 +221,7 @@ impl Game<'_> {
             return Err(SceneError::Unavailable);
         }
         if !lives(scene) {
-            return self.draw_scene_quads(batch, rect, blocks, view, |_| {});
+            return self.draw_scene_quads(batch, rect, blocks, look, view, |_| {});
         }
         let clock = check(rect, scene, view)?;
         // Checked whole before anything is kept; an empty list allocates nothing.
@@ -255,8 +256,11 @@ impl Game<'_> {
             .live
             .iter()
             .position(|l| l.owner == owner && l.id == clock.id);
+        // A scene with sections keeps its particles when its blocks change (a section
+        // shown, a block set): its small level is rebuilt in place below.
+        let sectioned = !scene.sections.is_empty();
         let same = |l: &Live| {
-            l.key == key
+            (l.key == key || sectioned)
                 && l.entities.len() == scene.entities.len()
                 && l.entities
                     .iter()
@@ -271,9 +275,9 @@ impl Game<'_> {
                 Some(i) => {
                     let l = &mut scenes.live[i];
                     l.frame = frame;
-                    self.draw_live(batch, rect, blocks, view, l, clock.partial)?;
+                    self.draw_live(batch, rect, blocks, look, view, l, clock.partial)?;
                 }
-                None => self.draw_scene_quads(batch, rect, blocks, view, |_| {})?,
+                None => self.draw_scene_quads(batch, rect, blocks, look, view, |_| {})?,
             }
             return Err(SceneError::TooManyScenes);
         }
@@ -300,6 +304,10 @@ impl Game<'_> {
         };
         let l = &mut scenes.live[i];
         l.frame = frame;
+        if l.key != key {
+            (l.world, l.picks) = self.scene_level(blocks);
+            l.key = key;
+        }
         for (index, mob) in existing {
             l.mobs[index] = mob;
         }
@@ -307,15 +315,17 @@ impl Game<'_> {
         for (mob, e) in l.mobs.iter_mut().zip(&scene.entities) {
             pose(mob, e, clock);
         }
-        self.draw_live(batch, rect, blocks, view, l, clock.partial)
+        self.draw_live(batch, rect, blocks, look, view, l, clock.partial)
     }
 
     /// `l`'s blocks, entities and particles as they are, `partial` into the next tick.
+    #[allow(clippy::too_many_arguments)]
     fn draw_live(
         &self,
         batch: &mut HudBatch,
         rect: [f32; 4],
         blocks: &[SceneBlock<'_>],
+        look: &SceneLook<'_>,
         view: SceneView,
         l: &mut Live,
         partial: f32,
@@ -326,7 +336,7 @@ impl Game<'_> {
             verts,
             ..
         } = l;
-        self.draw_scene_quads(batch, rect, blocks, view, |quads| {
+        self.draw_scene_quads(batch, rect, blocks, look, view, |quads| {
             for mob in mobs.iter() {
                 verts.clear();
                 // `DrawContext::entity`'s submission, in the scene's coordinates.
@@ -337,13 +347,13 @@ impl Game<'_> {
             let base = facing_viewer(view);
             engine.render(DVec3::ZERO, base, partial, &|_| 0xFF, verts);
             for q in verts.as_chunks::<4>().0 {
-                quads.push(SceneQuad {
-                    corners: q.each_ref().map(|v| Vec3::from_array(v.pos)),
-                    uv: q.each_ref().map(|v| v.uv),
-                    color: q[0].color,
-                    normal: Vec3::Z,
-                    cull: false,
-                });
+                quads.push(SceneQuad::baked(
+                    q.each_ref().map(|v| Vec3::from_array(v.pos)),
+                    q.each_ref().map(|v| v.uv),
+                    q[0].color,
+                    Vec3::Z,
+                    false,
+                ));
             }
         })
     }
@@ -366,22 +376,7 @@ impl Game<'_> {
                 .map_err(|error| entity_refusal(error, index))?;
             mobs.push(mob);
         }
-        let mut world = World::new(self.res.facts().air, 0);
-        let mut picks = Vec::new();
-        let near = |v: i32| f64::from(v).abs() <= FAR;
-        for b in blocks {
-            if !(near(b.pos[0]) && near(b.pos[2])) {
-                continue;
-            }
-            let at = (b.pos[0] >> 4, b.pos[2] >> 4);
-            if world.chunks.get(&at).is_none() {
-                world.chunks.insert(at, Arc::new(Chunk::empty(at.0, at.1)));
-            }
-            // Outside the level's height a block draws but has no animate tick.
-            if world.set_stored(b.pos[0], b.pos[1], b.pos[2], b.state) {
-                picks.push(b.pos);
-            }
-        }
+        let (world, picks) = self.scene_level(blocks);
         let mut engine = ParticleEngine::new(
             &self.pack.source,
             &self.gui.atlas.sprites,
@@ -413,6 +408,28 @@ impl Game<'_> {
             mobs,
             verts: Vec::new(),
         })
+    }
+
+    /// A small level of `blocks`, every section's (hidden ones too, so particles land on
+    /// them), and the blocks its animate ticks pick among.
+    fn scene_level(&self, blocks: &[SceneBlock<'_>]) -> (World, Vec<[i32; 3]>) {
+        let mut world = World::new(self.res.facts().air, 0);
+        let mut picks = Vec::new();
+        let near = |v: i32| f64::from(v).abs() <= FAR;
+        for b in blocks {
+            if !(near(b.pos[0]) && near(b.pos[2])) {
+                continue;
+            }
+            let at = (b.pos[0] >> 4, b.pos[2] >> 4);
+            if world.chunks.get(&at).is_none() {
+                world.chunks.insert(at, Arc::new(Chunk::empty(at.0, at.1)));
+            }
+            // Outside the level's height a block draws but has no animate tick.
+            if world.set_stored(b.pos[0], b.pos[1], b.pos[2], b.state) {
+                picks.push(b.pos);
+            }
+        }
+        (world, picks)
     }
 
     /// Runs `l`'s ticks up to `clock.tick` as the client's tick runs them: the blocks'
@@ -506,13 +523,13 @@ fn entity_quads(verts: &[Vertex], quads: &mut Vec<SceneQuad>) {
         let normal = (corners[1] - corners[0])
             .cross(corners[2] - corners[0])
             .normalize_or_zero();
-        quads.push(SceneQuad {
+        quads.push(SceneQuad::baked(
             corners,
-            uv: q.each_ref().map(|v| v.uv),
-            color: shaded(q[0].color, face_shade(normal)),
+            q.each_ref().map(|v| v.uv),
+            shaded(q[0].color, face_shade(normal)),
             normal,
-            cull: normal != Vec3::ZERO,
-        });
+            normal != Vec3::ZERO,
+        ));
     }
 }
 

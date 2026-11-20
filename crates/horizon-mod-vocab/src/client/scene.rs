@@ -21,8 +21,9 @@ impl SceneBlockEntity {
     }
 }
 
-/// One block of a scene a mod draws in a screen: its local position and state, and the
-/// optional mod block entity drawn by its Part as in the world.
+/// One block of a scene a mod draws in a screen: its local position and state, the
+/// optional mod block entity drawn by its Part as in the world, the section it belongs to,
+/// and how far it is broken.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
@@ -34,12 +35,177 @@ pub struct SceneBlock {
     pub state: BlockState,
     /// Optional owned block entity drawing data.
     pub entity: Option<SceneBlockEntity>,
+    /// The index in `Scene::sections` of the section the block belongs to: it moves, turns
+    /// and is lit with it, and its faces are culled against that section's blocks only.
+    /// Ignored in a scene with no sections.
+    pub section: u32,
+    /// How far the block is broken: destroy stage 0 to 9, drawn over its model as the world
+    /// draws a block being mined. Past 9 draws no overlay.
+    pub breaking: Option<u8>,
 }
 
 impl SceneBlock {
-    /// Describe one scene-local block and optional entity.
+    /// Describe one scene-local block and optional entity, in section 0, unbroken.
     pub fn new(pos: [i32; 3], state: BlockState, entity: Option<SceneBlockEntity>) -> Self {
-        Self { pos, state, entity }
+        Self {
+            pos,
+            state,
+            entity,
+            section: 0,
+            breaking: None,
+        }
+    }
+    /// The same block in section `section`.
+    pub fn in_section(mut self, section: u32) -> Self {
+        self.section = section;
+        self
+    }
+    /// The same block broken to destroy stage `stage` (0 to 9).
+    pub fn breaking(mut self, stage: u8) -> Self {
+        self.breaking = Some(stage);
+        self
+    }
+}
+
+/// Light packed as `BlockEntityDrawContext::light` packs it, full bright: 16 times sky
+/// light 15 in bits 0..8 and 16 times block light 15 in bits 8..16.
+pub const SCENE_FULL_BRIGHT: u32 = 240 | 240 << 8;
+
+/// A part of a scene that moves, turns and is lit as one: what Ponder calls a world
+/// section. Every block, block entity and quad in it is drawn through `transform` and
+/// lit by `light`, in the same depth as the rest of the scene, so sections hide each
+/// other where they cross.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct SceneSection {
+    /// A column-major affine 4 by 4 matrix, in scene blocks, applied to everything in the
+    /// section before the view. The bottom row must be `0, 0, 0, 1`.
+    pub transform: [f32; 16],
+    /// The light everything in the section is drawn with, packed as [`SCENE_FULL_BRIGHT`]
+    /// is: through the client's lightmap, as world blocks are lit.
+    pub light: u32,
+    /// Whether the section is drawn. A section that isn't still stands in the scene's
+    /// level, so particles land on its blocks.
+    pub drawn: bool,
+}
+
+impl SceneSection {
+    /// A drawn section, in place and full bright.
+    pub fn new() -> Self {
+        Self {
+            transform: [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
+            light: SCENE_FULL_BRIGHT,
+            drawn: true,
+        }
+    }
+    /// The same section through `transform` (column major).
+    pub fn transformed(mut self, transform: [f32; 16]) -> Self {
+        self.transform = transform;
+        self
+    }
+    /// The same section lit by block light `block` and sky light `sky`, each 0 to 15.
+    pub fn lit(mut self, block: u8, sky: u8) -> Self {
+        self.light = (u32::from(sky.min(15)) * 16) | ((u32::from(block.min(15)) * 16) << 8);
+        self
+    }
+    /// The same section drawn or not.
+    pub fn drawn(mut self, drawn: bool) -> Self {
+        self.drawn = drawn;
+        self
+    }
+}
+
+impl Default for SceneSection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// How a scene's faces are shaded.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum SceneShading {
+    /// By the face's direction in the scene, as world blocks are: 1 on top, 0.5 underneath,
+    /// 0.8 north and south, 0.6 east and west.
+    Faces,
+    /// By two lights fixed to the view, as the game lights models in its GUI:
+    /// `min(1, (max(0, l0·n) + max(0, l1·n)) · 0.6 + 0.4)`, with `n` the face's normal after
+    /// its section's transform and the view, in the view's frame (x right, y up, z toward
+    /// the viewer). A face its model marks as not shaded takes the value for `n` straight up.
+    View {
+        /// The two lights' directions, in the view's frame.
+        lights: [[f32; 3]; 2],
+    },
+}
+
+/// A quad drawn in a scene's own depth, among its blocks: an outline's edge or face, a
+/// shadow under the scene, a flash over it. Blocks in front of it hide it.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct SceneQuad {
+    /// The corners in scene blocks, in a model face's order (top left, bottom left, bottom
+    /// right, top right as seen from the front).
+    pub corners: [[f32; 3]; 4],
+    /// Each corner's colour, ARGB; the quad's colour runs between them.
+    pub colors: [u32; 4],
+    /// The GUI sprite the quad shows (as `DrawContext::sprite` names one), or none for
+    /// plain colour.
+    pub sprite: Option<String>,
+    /// Each corner's place on the sprite, 0 to 1. Ignored without a sprite.
+    pub uv: [[f32; 2]; 4],
+    /// The section whose transform and light the quad follows; none for the scene's own
+    /// frame, full bright.
+    pub section: Option<u32>,
+    /// Whether the scene's shading darkens it by its facing, as it does a block's face.
+    pub shade: bool,
+    /// Whether it is left out when it faces away from the viewer.
+    pub cull: bool,
+}
+
+impl SceneQuad {
+    /// A quad of plain colour `argb` with `corners`, in the scene's own frame, unshaded and
+    /// seen from both sides.
+    pub fn new(corners: [[f32; 3]; 4], argb: u32) -> Self {
+        Self {
+            corners,
+            colors: [argb; 4],
+            sprite: None,
+            uv: [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
+            section: None,
+            shade: false,
+            cull: false,
+        }
+    }
+    /// The same quad with a colour per corner.
+    pub fn colored(mut self, colors: [u32; 4]) -> Self {
+        self.colors = colors;
+        self
+    }
+    /// The same quad showing `sprite` at `uv`.
+    pub fn sprite(mut self, sprite: impl Into<String>, uv: [[f32; 2]; 4]) -> Self {
+        self.sprite = Some(sprite.into());
+        self.uv = uv;
+        self
+    }
+    /// The same quad in section `section`.
+    pub fn in_section(mut self, section: u32) -> Self {
+        self.section = Some(section);
+        self
+    }
+    /// The same quad shaded by the scene's shading, or not.
+    pub fn shaded(mut self, shade: bool) -> Self {
+        self.shade = shade;
+        self
+    }
+    /// The same quad culled when it faces away, or not.
+    pub fn culled(mut self, cull: bool) -> Self {
+        self.cull = cull;
+        self
     }
 }
 
@@ -191,6 +357,10 @@ pub const SCENE_MAX_ENTITIES: usize = 16;
 /// together: past it no new particle is added, and more than this many to add at once
 /// is [`SceneError::TooManyParticles`].
 pub const SCENE_MAX_PARTICLES: usize = 512;
+/// The most quads one scene takes ([`SceneError::TooManyQuads`]).
+pub const SCENE_MAX_QUADS: usize = 16_384;
+/// The most sections one scene takes ([`SceneError::BadSection`]).
+pub const SCENE_MAX_SECTIONS: usize = 4096;
 /// The most scenes with entities or particles that animate in one frame
 /// ([`SceneError::TooManyScenes`]).
 pub const SCENE_MAX_ANIMATING: usize = 4;
@@ -199,6 +369,11 @@ pub const SCENE_MAX_ANIMATING: usize = 4;
 /// standing in it, the particles the mod adds and the clock that ticks them. A scene of
 /// blocks alone (no entities, no particles, and no clock or one with `animate_blocks`
 /// off) keeps no state and reads no clock. Keep one and change its clock each frame.
+///
+/// Its blocks and quads may be split into `sections` that move, turn, fade and hide as
+/// units, all in one depth. A scene with no sections is one section in place, full
+/// bright: as scenes were drawn before sections. `shading` and `biome` say how faces are
+/// shaded and which biome's colours tint grass, foliage and water.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
@@ -211,6 +386,16 @@ pub struct Scene {
     pub particles: Vec<SceneParticle>,
     /// The scene's clock, for a scene that lives.
     pub clock: Option<SceneClock>,
+    /// The scene's sections; blocks and quads name theirs by index. Empty: one section in
+    /// place, full bright.
+    pub sections: Vec<SceneSection>,
+    /// Quads drawn in the scene's depth: outlines, shadows.
+    pub quads: Vec<SceneQuad>,
+    /// How faces are shaded.
+    pub shading: SceneShading,
+    /// The biome whose colours tint the scene's grass, foliage and water (`minecraft:plains`);
+    /// none for a fixed default grass colour.
+    pub biome: Option<Identifier>,
 }
 
 impl Scene {
@@ -221,7 +406,31 @@ impl Scene {
             entities: Vec::new(),
             particles: Vec::new(),
             clock: None,
+            sections: Vec::new(),
+            quads: Vec::new(),
+            shading: SceneShading::Faces,
+            biome: None,
         }
+    }
+    /// The same scene split into `sections`.
+    pub fn with_sections(mut self, sections: Vec<SceneSection>) -> Self {
+        self.sections = sections;
+        self
+    }
+    /// The same scene with `quads` in its depth.
+    pub fn with_quads(mut self, quads: Vec<SceneQuad>) -> Self {
+        self.quads = quads;
+        self
+    }
+    /// The same scene shaded by `shading`.
+    pub fn with_shading(mut self, shading: SceneShading) -> Self {
+        self.shading = shading;
+        self
+    }
+    /// The same scene tinted by `biome`'s colours.
+    pub fn with_biome(mut self, biome: Identifier) -> Self {
+        self.biome = Some(biome);
+        self
     }
     /// The same scene on `clock`.
     pub fn with_clock(mut self, clock: SceneClock) -> Self {
@@ -297,4 +506,21 @@ pub enum SceneError {
     BadClock,
     /// Entities or particles without a clock.
     NoClock,
+    /// A section's transform isn't finite or isn't affine, more than
+    /// [`SCENE_MAX_SECTIONS`] sections, or a block or quad names a section the scene
+    /// doesn't have.
+    BadSection {
+        /// The section's index: the one at fault, or the one named.
+        index: u32,
+    },
+    /// More than [`SCENE_MAX_QUADS`] quads.
+    TooManyQuads,
+    /// A quad's corners or UVs aren't finite, or it names a sprite the GUI atlas doesn't
+    /// have.
+    BadQuad {
+        /// The quad's index in `quads`.
+        index: u32,
+    },
+    /// A biome this game doesn't have.
+    BadBiome,
 }

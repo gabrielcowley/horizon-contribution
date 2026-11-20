@@ -60,7 +60,8 @@ id 1 is another scene.
   and runs only the last 20 ticks, so a frame never stalls.
 - **The same tick** again: the scene is paused. Nothing is added and nothing moves.
 - **A tick behind**, or changed blocks or entities: the scene starts over with no
-  particles.
+  particles. A scene in sections (below) keeps its particles when only its blocks change,
+  so showing a section or setting a block doesn't wipe them.
 
 Each tick's randomness is seeded from the id and the tick, and the picks cover the scene's
 blocks, not the view, so the same ticks always give the same picture from any angle. A
@@ -71,6 +72,50 @@ game's Particles option applies, as it does in the world. Scenes make no sound.
 At most four scenes with entities or particles animate in one frame. A fifth still draws
 its blocks and its last state, but its clock does not advance, and the call returns
 `TooManyScenes`.
+
+## Sections, light and shading
+
+A scene can be split into `sections` that move, turn, fade and hide as units, as Ponder's
+world sections do. Each block names its section by index (`SceneBlock::in_section`), and so
+can each of the scene's quads. A scene with no sections is one section in place, full bright,
+and draws exactly as before.
+
+```rust
+use mod_api::{Scene, SceneQuad, SceneSection, SceneShading};
+
+let turned = glam::Mat4::from_rotation_y(0.4); // a column-major affine transform
+let scene = Scene::new(vec![base, rotor.in_section(1)])
+    .with_sections(vec![
+        SceneSection::new(),
+        SceneSection::new().transformed(turned.to_cols_array()).lit(9, 9),
+    ])
+    .with_quads(vec![SceneQuad::new(corners, 0xFF6C_C0FF).in_section(1)])
+    .with_shading(SceneShading::View { lights: [[0.4, -1.0, 0.7], [-0.4, -0.5, 0.7]] })
+    .with_biome(mod_api::Identifier::parse("minecraft:plains").unwrap());
+```
+
+- **One depth.** Every section is drawn in the same call and sorted together, so a turning
+  section hides a fixed one where they cross.
+- **Transform.** Everything in a section (its blocks, their block entities, its quads) goes
+  through its `transform`. Normals follow, and back faces are culled after it.
+- **Culling.** A block's face is left out only against a solid neighbour in its own
+  section, so two sections never hide each other's faces.
+- **Light.** A section is lit by its packed `light` through the client's lightmap, as world
+  blocks are. `lit(block, sky)` sets it. Fading by light (Ponder fades sections from light 5
+  to 15) never makes a section see-through. Block entities read the same value from
+  `light()`.
+- **Hidden.** An undrawn section (`drawn(false)`) is not drawn, but its blocks still stand
+  in the scene's level, so particles land on them.
+- **Shading.** `SceneShading::Faces` (the default) shades a face by its direction, as world
+  blocks are. `SceneShading::View` lights the scene by two lights fixed to the view, as the
+  game lights models in its GUI: `min(1, (max(0, l0·n) + max(0, l1·n)) · 0.6 + 0.4)`.
+- **Biome.** `biome` names the biome whose colours tint grass, foliage and water. Without
+  one, grass takes the fixed default colour.
+- **Breaking.** `SceneBlock::breaking(stage)` draws destroy stage 0 to 9 over the block's
+  model, under its section's transform.
+- **Quads.** `Scene::quads` are drawn in the scene's depth, so blocks hide them: outlines,
+  shadows, flashes. Each has corners in scene blocks, a colour per corner, and optionally a
+  GUI sprite, a section, the scene's shading and culling. A scene takes at most 16,384.
 
 ## Refusals
 
@@ -93,9 +138,15 @@ returns a `SceneError`:
 | `BadParticle { index }` | Particle options, a position or a velocity that isn't finite, or options that name a stack |
 | `BadClock` | A partial tick that isn't finite |
 | `NoClock` | Entities or particles without a clock |
+| `BadSection { index }` | A section transform that isn't finite or affine, more than 4096 sections, or a block or quad naming a section the scene doesn't have |
+| `TooManyQuads` | More than `SCENE_MAX_QUADS` (16,384) quads |
+| `BadQuad { index }` | A quad's corners or UVs that aren't finite, or a sprite the GUI atlas doesn't have |
+| `BadBiome` | A biome the game doesn't have |
 
 ## Not yet
 
+- Fluids and vanilla block entities (chests, signs) in a scene's blocks are not drawn yet.
+- The breaking overlay is drawn with the GUI's ordinary blending, not the world's multiply.
 - Additive (glowing) particle quads and pack (Polytone) particles are not drawn in scenes.
 - A scene's blocks have no light, so a block whose animate tick reads light behaves as
   it would in the dark.

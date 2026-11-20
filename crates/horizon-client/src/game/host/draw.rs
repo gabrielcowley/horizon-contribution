@@ -95,9 +95,16 @@ impl DrawContext for GameDrawContext<'_, '_> {
         scene: &mod_api::Scene,
         view: SceneView,
     ) -> Result<(), mod_api::SceneError> {
-        let blocks = crate::game::api_values::aggregates::scene_blocks(&scene.blocks)?;
+        let blocks = crate::game::api_values::aggregates::scene_blocks(
+            &scene.blocks,
+            scene.sections.len(),
+        )?;
+        let biomes = self.game.res.biomes();
+        let look = crate::game::native_scene::check_look(scene, |name| {
+            biomes.contains(name).then(|| biomes.id(name))
+        })?;
         self.game
-            .native_draw_scene(&mut *self.surface, rect, &blocks, scene, view)
+            .native_draw_scene(&mut *self.surface, rect, &blocks, &look, scene, view)
     }
     fn push_clip(&mut self, rect: [f32; 4]) -> Result<(), GuiClipRefusal> {
         self.clips.push(self.surface, rect)
