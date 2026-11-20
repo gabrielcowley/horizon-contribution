@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -79,6 +81,21 @@ class SourceMtimesTests(unittest.TestCase):
         with self.assertRaises(subprocess.CalledProcessError):
             restore_and_snapshot(self.root, self.snapshot)
 
+    def test_a_damaged_snapshot_is_ignored_with_a_warning(self):
+        # A cache entry cut short: nothing is restored, every input dated now, and the job goes on.
+        restore_and_snapshot(self.root, self.snapshot)
+        whole = self.snapshot.read_text()
+        for damaged in (whole[: len(whole) // 2], "[]", '{"src": "x"}'):
+            with self.subTest(damaged=damaged[:20]):
+                self.snapshot.write_text(damaged)
+                os.utime(self.root / "src/value.txt", ns=(1, 1))
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    restore_and_snapshot(self.root, self.snapshot)
+                self.assertIn("::warning::ci-source-mtimes.json is damaged", output.getvalue())
+                self.assertGreater((self.root / "src/value.txt").stat().st_mtime_ns, 1)
+                self.assertIn("src/value.txt", json.loads(self.snapshot.read_text()))
+
     def test_clippy_reuses_both_feature_graphs_and_rechecks_changed_source(self):
         # verify runs Python tests before installing its Rust components. The
         # fixture is exercised wherever Clippy is already available.
@@ -141,7 +158,7 @@ class BlacksmithBuildFolderTests(unittest.TestCase):
         # A build before the restore would compare against checkout dates and trust another tree's artifacts' dates;
         # two jobs on one disk would each replace the other's build.
         jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
-        keys = []
+        keys, commits = [], []
         for name, job in jobs.items():
             steps = job.get("steps", [])
             builds = [i for i, step in enumerate(steps) if BUILDS.search(step.get("run", ""))]
@@ -156,10 +173,14 @@ class BlacksmithBuildFolderTests(unittest.TestCase):
                 self.assertEqual(steps[restore]["run"], f"tools/ci/build_folder.sh {steps[mount]['with']['path']}")
                 self.assertEqual(steps[mount]["if"], steps[restore]["if"])
                 keys.append(steps[mount]["with"]["key"])
+                commits.append(steps[mount]["with"].get("commit"))
         self.assertGreaterEqual(len(keys), 4)
         self.assertEqual(len(set(keys)), len(keys))
         for key in keys:
-            self.assertTrue(key.endswith("-${{ env.BUILD_DISKS }}"), key)
+            # Forks' pull requests mount main's disks too: a disk of their own was never saved (pull_request jobs
+            # cannot), so they built from scratch.
+            self.assertTrue(key.endswith("-own"), key)
+        self.assertEqual(commits, ["${{ env.SAVE_BUILD_DISK }}"] * len(keys))
 
 
 if __name__ == "__main__":
