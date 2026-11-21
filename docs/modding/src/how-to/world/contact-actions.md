@@ -40,6 +40,8 @@ The insert is real, with no simulate step, and it sees the state of the tick so 
 
 ## On the client
 
+Other entities need nothing on the client: when your action changes a mob's, a dropped item's or a projectile's position or movement, the server sends the change to clients that tick (as vanilla does for a pushed entity), so a carried item glides instead of jumping at its next position update.
+
 A belt that carries the player must move the local player in the client's own prediction too, or the server's corrections jerk it along. The client side has its own two hooks, for the local player only: `client_entity_inside` and `client_entity_after_fall_on`. They read through the client host and queue actions as their server twins do. Once the client's predicted tick is done, the game asks them for each contact the move made, in order, and calls `contact_action` with `HostSide::Client` and the local player as `event.entity`. There the part may move the player, write the client's copy of a block entity, or send a payload to the server. It makes no authoritative writes, so nothing is rolled back; a native panic still switches the mod's `contact_action` off. A replayed tick (prediction catching up after a server correction) tells nothing.
 
 See the hook notes in [`contact_action.rs`](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/contact_action.rs) and [`entity_after_fall_on.rs`](https://github.com/horizon-rust/horizon/blob/main/crates/horizon-mod-vocab/src/hooks/entity_after_fall_on.rs).

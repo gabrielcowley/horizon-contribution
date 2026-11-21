@@ -1449,6 +1449,7 @@ horizon-client game::native_hooks::client_text::tests::plain_text_reads_resolve_
 horizon-client game::native_hooks::client_text::tests::styled_text_reads_use_live_font_language_and_wrapping_outside_drawing lib daily resources
 horizon-client game::native_hooks::client_visual_text::tests::visual_read_uses_live_translations_styles_and_bidi_outside_drawing lib daily resources
 horizon-client game::native_hooks::component_hover::component_hover_tests::a_mod_sees_each_hover_and_may_draw_its_own lib daily resources
+horizon-client game::native_hooks::contact_action::contact_action_tests::a_carried_item_goes_to_clients_this_tick lib daily resources
 horizon-client game::native_hooks::contact_action::contact_action_tests::a_panicking_action_rolls_back_and_is_switched_off lib daily resources
 horizon-client game::native_hooks::contact_action::contact_action_tests::a_players_contact_action_moves_it_and_skips_the_dead lib daily resources
 horizon-client game::native_hooks::contact_action::contact_action_tests::an_action_on_a_replaced_block_is_not_called lib daily resources

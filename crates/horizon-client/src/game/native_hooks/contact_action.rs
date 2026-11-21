@@ -19,12 +19,14 @@ mod contact_action_tests {
 
     /// A one-slot depot on stone: its `entity_inside` queues one action a contact, and
     /// its `contact_action` takes the item whole while its slot is empty and leaves it
-    /// whole once full. It can also write a block through the host and then panic.
+    /// whole once full. It can also write a block through the host and then panic, or
+    /// carry an item along +x as a conveyor does instead of taking it.
     #[derive(Clone, Default)]
     struct DepotPart {
         held: Arc<Mutex<usize>>,
         called: Arc<Mutex<usize>>,
         panic_after_write: bool,
+        carry: bool,
     }
     #[mod_api::horizon_part]
     impl mod_api::BlockPart for DepotPart {
@@ -54,6 +56,10 @@ mod contact_action_tests {
                     mod_api::BlockUpdateFlags::CLIENTS,
                 );
                 panic!("a contact action panics after a write");
+            }
+            if self.carry {
+                event.entity.movement[0] = 0.15;
+                return;
             }
             if !event.entity.is_item() {
                 // Anything but an item is lifted half a block a tick.
@@ -130,6 +136,7 @@ mod contact_action_tests {
                 assert!(tick(game, &mut first), "the first item is taken whole");
                 assert!(!tick(game, &mut second), "the second item stays");
                 assert_eq!(second.stack.count, 3, "and keeps its whole stack");
+                assert!(!second.needs_sync, "an item the part leaves as it was isn't resent");
                 assert_eq!(*part.held.lock().unwrap(), 1, "the depot holds one item");
                 assert_eq!(*part.called.lock().unwrap(), 2);
             });
@@ -183,6 +190,9 @@ mod contact_action_tests {
         let mods = install("contact-panic", &part);
         mod_platform::testing::with_mods(mods, || {
             crate::game::native_entity_refs::tests::with_game(|game| {
+                // A server's game: a client's would refuse the write, and there would be
+                // nothing to roll back.
+                game.options.dedicated = Some(Vec::new());
                 let _ = horizon_client::block_contact::HOOKS.set(super::BLOCK_CONTACT_HOOKS);
                 let air = game.world.block(0, 101, 0);
                 let mut item = depot_and_item(game, 7);
@@ -197,6 +207,29 @@ mod contact_action_tests {
                     1,
                     "the part is switched off after its panic"
                 );
+            });
+        });
+    }
+
+    /// A part that carries an item marks it for sync (`hasImpulse`): its new movement goes
+    /// to clients this tick, not at the item's next 20-tick update, since a client runs no
+    /// contact action of its own and would stop the item with friction meanwhile.
+    #[test]
+    #[ignore = "daily"]
+    fn a_carried_item_goes_to_clients_this_tick() {
+        let part = DepotPart {
+            carry: true,
+            ..DepotPart::default()
+        };
+        let mods = install("contact-carry", &part);
+        mod_platform::testing::with_mods(mods, || {
+            crate::game::native_entity_refs::tests::with_game(|game| {
+                let _ = horizon_client::block_contact::HOOKS.set(super::BLOCK_CONTACT_HOOKS);
+                let mut item = depot_and_item(game, 7);
+                assert!(!item.needs_sync);
+                assert!(!tick(game, &mut item));
+                assert_eq!(item.velocity.x, 0.15, "the part's carry is kept");
+                assert!(item.needs_sync, "and goes to clients this tick");
             });
         });
     }

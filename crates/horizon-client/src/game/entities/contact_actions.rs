@@ -66,6 +66,7 @@ impl ContactSwept for SweptItem<'_> {
     fn keep(&mut self, game: &mut Game<'_>, entity: mod_api::ContactEntity) -> bool {
         use crate::game::api_values::TryIntoEngine;
         let item = &mut *self.0;
+        let before = (item.position, item.velocity);
         if let Some(at) = finite(entity.position) {
             item.position = at;
         }
@@ -82,6 +83,12 @@ impl ContactSwept for SweptItem<'_> {
                 item.velocity.z * factors.z,
             );
             item.fall_distance = 0.0;
+        }
+        // `hasImpulse`: a part's push goes to clients this tick. The item's own tick has
+        // already made its `> 0.1` check, and a client runs no contact action of its own,
+        // so without this a conveyor's carry shows only at the 20-tick position update.
+        if (item.position, item.velocity) != before {
+            item.needs_sync = true;
         }
         match entity.item.map(|stack| stack.try_into_engine(game.items())) {
             Some(Ok(stack)) if stack.count > 0 => item.stack = stack,
@@ -112,6 +119,7 @@ impl ContactSwept for SweptProjectile<'_> {
     }
     fn keep(&mut self, _: &mut Game<'_>, entity: mod_api::ContactEntity) -> bool {
         let shot = &mut *self.0;
+        let before = (shot.position, shot.velocity);
         if let Some(at) = finite(entity.position) {
             shot.position = at;
         }
@@ -126,6 +134,10 @@ impl ContactSwept for SweptProjectile<'_> {
                 shot.velocity.z * factors.z,
             );
             shot.fall_distance = 0.0;
+        }
+        // `hasImpulse`, as for an item: a part's push goes to clients this tick.
+        if (shot.position, shot.velocity) != before {
+            shot.needs_sync = true;
         }
         if entity.discard
             && let Some(arrow) = shot.arrow.as_mut()
