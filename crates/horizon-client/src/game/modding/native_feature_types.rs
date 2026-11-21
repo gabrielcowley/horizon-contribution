@@ -205,10 +205,7 @@ impl ModFeatureType for TypeAdapter {
     ) -> Result<Arc<dyn ModConfiguredFeature>, String> {
         let held = Held::of(parts.registry())?;
         let config = json_to_tag(config).map_err(|e| e.to_string())?;
-        let mut decoder = Decoder {
-            parts,
-            held: &held,
-        };
+        let mut decoder = Decoder { parts, held: &held };
         let feature = horizon_client::crash::contain(|| self.ty.decode(&config, &mut decoder))
             .map_err(|panic| format!("decoding panicked: {panic}"))?
             .map_err(|error| error.0)?;

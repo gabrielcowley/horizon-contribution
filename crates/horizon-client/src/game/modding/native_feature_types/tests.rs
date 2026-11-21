@@ -176,7 +176,10 @@ fn a_mods_feature_decodes_vanilla_targets_and_places_through_the_engine_target()
         assert_eq!(feature.place(&mut engine), Ok(true));
         // Both blocks tested both rules in order: air (rule 0) matched nothing, granite did.
         assert_eq!(engine.tested, [0, 1, 0, 1]);
-        assert_eq!(engine.writes, [([4, 10, 4], GRANITE), ([5, 10, 4], GRANITE)]);
+        assert_eq!(
+            engine.writes,
+            [([4, 10, 4], GRANITE), ([5, 10, 4], GRANITE)]
+        );
 
         // A config the type refuses refuses the feature, naming its message.
         let refusal = vein.decode(&serde_json::json!({}), &mut engine).err();

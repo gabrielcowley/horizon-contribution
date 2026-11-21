@@ -169,8 +169,13 @@ impl ModFeatureParts for Parts<'_, '_> {
     }
     fn rule_test(&mut self, value: &serde_json::Value) -> Result<u32, String> {
         let handle = u32::try_from(self.rules.len()).map_err(|_| "too many rule tests")?;
-        let rule = RuleTest::decode(&value.to_string(), self.bindings, self.depth, self.remaining)
-            .map_err(|e| e.to_string())?;
+        let rule = RuleTest::decode(
+            &value.to_string(),
+            self.bindings,
+            self.depth,
+            self.remaining,
+        )
+        .map_err(|e| e.to_string())?;
         self.rules.push(rule);
         Ok(handle)
     }
@@ -249,7 +254,9 @@ impl ModFeature {
                 FeatureExecutionError::Mod(message) => message.clone(),
                 FeatureExecutionError::Random(e) => e.to_string(),
                 FeatureExecutionError::Query(e) => e.to_string(),
-                FeatureExecutionError::WorkLimit => format!("more than {FEATURE_WORK} reads and writes"),
+                FeatureExecutionError::WorkLimit => {
+                    format!("more than {FEATURE_WORK} reads and writes")
+                }
                 _ => "the world refused a write".into(),
             };
             log::error!(
@@ -362,7 +369,10 @@ impl<W: FeatureWorld + PlacementContext, R: RandomSource> Target<'_, W, R> {
         if !self.charge() {
             return false;
         }
-        let inside = self.world.outside_build_height(pos[1]).map(|outside| !outside);
+        let inside = self
+            .world
+            .outside_build_height(pos[1])
+            .map(|outside| !outside);
         self.query(inside).unwrap_or(false) && {
             let can = self.world.ensure_can_write(pos);
             self.query(can).unwrap_or(false)

@@ -147,8 +147,10 @@ impl StructuresRegistrar for PartRegistrar {
             }
         };
         if self.feature_types.iter().any(|t| *t.id == *id) {
-            self.refused
-                .push(format!("{} registered feature type {id} twice", self.mod_id));
+            self.refused.push(format!(
+                "{} registered feature type {id} twice",
+                self.mod_id
+            ));
             return;
         }
         self.feature_types

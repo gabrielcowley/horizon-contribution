@@ -156,7 +156,10 @@ impl ModFeatureType for VeinType {
 }
 
 fn types() -> ModFeatureTypes {
-    BTreeMap::from([("test:vein".to_owned(), Arc::new(VeinType) as Arc<dyn ModFeatureType>)])
+    BTreeMap::from([(
+        "test:vein".to_owned(),
+        Arc::new(VeinType) as Arc<dyn ModFeatureType>,
+    )])
 }
 
 fn decode(json: serde_json::Value) -> Result<FeatureDefinition, DecodeError> {
