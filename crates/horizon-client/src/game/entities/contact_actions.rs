@@ -225,8 +225,8 @@ impl Game<'_> {
     /// write host. An action is skipped when its block is no longer the state it touched,
     /// and the rest stop once the entity is gone. Each call runs in a transaction: a native
     /// panic or a wasm trap rolls back what it wrote and leaves the entity as it was (the
-    /// dispatch has already switched the part off for the session). Whether the entity is
-    /// gone afterwards: taken whole or discarded.
+    /// dispatch has already switched the hook off for the session for the part's whole mod).
+    /// Whether the entity is gone afterwards: taken whole or discarded.
     pub(in crate::game) fn run_contact_actions(
         &mut self,
         swept: &mut dyn ContactSwept,
