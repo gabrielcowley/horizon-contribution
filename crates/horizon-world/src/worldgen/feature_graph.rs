@@ -93,6 +93,8 @@ pub enum FeatureDefinition {
     Overlay(Vec<PlacedFeatureDefinition>),
     BooleanChoice(Box<[PlacedFeatureDefinition; 2]>),
     RandomChoice(Vec<PlacedFeatureDefinition>),
+    /// A mod's feature type (`Registrar::register_feature_type`), which decoded its own settings.
+    Mod(super::mod_features::ModFeature),
     ChanceChoice {
         features: Vec<(f32, PlacedFeatureDefinition)>,
         fallback: Box<PlacedFeatureDefinition>,
@@ -125,6 +127,8 @@ pub enum FeatureExecutionError<E> {
     InvalidPendingIndex,
     /// A block-state transition required by a feature is absent from the registry.
     InvalidState,
+    /// A mod's feature failed: its error, a caught unwind or a wasm trap. Nothing it wrote was kept.
+    Mod(String),
 }
 impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -153,6 +157,7 @@ impl<E: std::fmt::Display> std::fmt::Display for FeatureExecutionError<E> {
             Self::WorkLimit => f.write_str("feature graph work limit exceeded"),
             Self::InvalidPendingIndex => f.write_str("invalid pending modifier index"),
             Self::InvalidState => f.write_str("feature block state outside registry"),
+            Self::Mod(message) => f.write_str(message),
         }
     }
 }
@@ -805,6 +810,16 @@ impl FeatureDefinition {
                     )?),
                 })
             }
+            kind if super::mod_features::ModFeature::is_mod_type(kind) => {
+                super::mod_features::ModFeature::decode(
+                    kind,
+                    &serde_json::from_str(json)?,
+                    blocks.ok_or(DecodeError::Field("mod feature bindings"))?,
+                    depth,
+                    remaining,
+                )
+                .map(Self::Mod)
+            }
             _ => BasicFeature::from_json(json).map(Self::Basic),
         }
     }
@@ -1024,6 +1039,7 @@ impl FeatureDefinition {
                 .place(world, random, origin)
                 .map_err(FeatureExecutionError::Basic),
             Self::Ore(feature) => feature.place(world, random, origin),
+            Self::Mod(feature) => feature.place(world, random, origin),
             Self::VegetationPatch(feature) => {
                 feature.place(world, random, origin, &mut |f, w, r, p| {
                     f.place_in(&mut placer, w, r, p, run)
