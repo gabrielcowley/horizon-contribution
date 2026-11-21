@@ -191,13 +191,23 @@ pub struct Guest {
     pub left_reason: String,
     /// A validated movement report the mods have not ruled on yet (`player_move`).
     pub pending_move: Option<super::hub::PendingMove>,
+    /// Validated movement packets waiting to be told to `player_move_packet`, oldest first, and
+    /// the hub tick with how many were told in it (the per-tick budget, `MOVE_PACKET_BUDGET`).
+    pub move_packet_queue: VecDeque<super::hub::MovePacket>,
+    pub move_packets_told: (u64, usize),
     /// A disconnect was started ([`Guest::begin_disconnect`]); the connection closes when the
     /// server next polls it, and until then no other disconnect is sent.
     pub disconnect_pending: bool,
+    /// A mod's personal sidebar is on this client (`Game::native_sidebar`); it is gone with the
+    /// connection.
+    pub personal_sidebar: bool,
     pub uuid: u128,
     pub name: String,
-    /// The profile's properties, for the player list (skins).
+    /// The properties the player logged in with (`ServerPlayer.getGameProfile`).
     pub properties: Vec<horizon_protocol::packets::login::Property>,
+    /// The properties a native mod set (`player_set_profile_property`): overrides by name over the login
+    /// ones in what is published (the player list, the profile lookups), never in `properties` itself.
+    pub profile_overrides: Vec<horizon_protocol::packets::login::Property>,
     pub entity_id: i32,
     pub sender: PlayerSender,
     pub latency: Arc<AtomicI32>,
@@ -209,9 +219,8 @@ pub struct Guest {
     pub position: [f64; 3],
     /// Where the player's chunk tickets stay while they are not at `position`.
     /// `None`: they are at `position`'s chunk. `Some(chunk)`: a teleport sent
-    /// the player away and they are still at the chunk it left. The hold ends
-    /// (back to `None`) at an accepted move, the teleport's ack, a passenger or
-    /// vehicle move, a camera change and a placement.
+    /// the player away and they are still at the chunk it left. The hold ends (back to `None`) at
+    /// an accepted move or teleport ack, a passenger or vehicle move, a camera change, a placement.
     pub held_ticket_chunk: Option<(i32, i32)>,
     pub previous_position: [f64; 3],
     pub yaw: f32,
@@ -318,6 +327,8 @@ pub struct Guest {
     pub replay: Option<Box<super::prediction::Replay>>,
     /// What the server sent this tick that changes how the client moves (only while it records).
     pub changes: std::sync::Mutex<Vec<Change>>,
+    /// The pings sent to it that its client has not answered (`player_pong` hears only those).
+    pub pings: std::sync::Mutex<super::ping_ledger::PingLedger>,
     /// It accepted a move since the last entity range checks
     /// (ServerChunkCache.move), which then check all of its pairs again.
     pub moved: bool,
@@ -361,18 +372,16 @@ pub struct Guest {
     pub tracker: Tracker,
     // Player state the gameplay code reads and writes.
     pub motion: Option<Box<PlayerMotion>>,
-    /// What the player's file says of the body (`Entity.load`: the fire
-    /// and air ticks and the fall distance), for the first body it gets.
+    /// What the player's file says of the body (`Entity.load`: fire, air, fall distance), for its first.
     pub loaded_body: Option<SavedBody>,
-    /// The attribute list the player's last body hands to its next one
-    /// (`ServerPlayer.restoreFrom`, `PlayerMotion::carried_attributes`),
-    /// until that body exists: the scale a player has set stays through a
-    /// respawn and a change of level (#3684).
+    /// The attribute list a body hands to the next (`ServerPlayer.restoreFrom`,
+    /// `PlayerMotion::carried_attributes`) until it exists: a set scale stays through a respawn (#3684).
     pub carried_attributes: Option<horizon_core::nbt::Tag>,
     /// The accepted hit follows the same living body through a full teleport restore.
     pub carried_hit: Option<std::sync::Arc<crate::health::AcceptedHit>>,
-    /// The vehicle the player's file names (`ServerPlayer.saveParentVehicle`'s
-    /// "RootVehicle"), for the ride to come back on the next login.
+    /// `Entity.tickCount` across a trip to another level (`ServerPlayer.teleport` keeps the object).
+    pub carried_ticks: Option<i32>,
+    /// The vehicle the player's file names (`saveParentVehicle`'s "RootVehicle"), for the next login.
     pub saved_vehicle: Option<[i32; 4]>,
     /// The hurt and attack logs of the body it had before it respawned,
     /// until the new body takes them over (the control socket's `hurtlog`
@@ -445,6 +454,8 @@ pub struct Guest {
     pub glide_end_unsent: bool,
     /// Pose last delivered to this player's own entity data, initially Standing.
     pub sent_pose: Pose,
+    /// Avatar.DATA_PLAYER_MAIN_HAND last sent to this player's own entity data, RIGHT (1) first.
+    pub sent_main_hand: i32,
     /// The skin parts (Avatar.DATA_PLAYER_MODE_CUSTOMISATION) last delivered to
     /// this player's own entity data, initially 0: the bits the client's own model
     /// shows, which its player starts at (no layer) until the server sends them.
@@ -707,13 +718,17 @@ impl Guest {
             placed_at: 0,
             level_entered: 0,
             last_reported: (position, [0.0, 0.0]),
+            move_packet_queue: VecDeque::new(),
+            move_packets_told: (0, 0),
             center_sent: None,
             left_reason: String::new(),
             pending_move: None,
             disconnect_pending: false,
+            personal_sidebar: false,
             uuid: j.uuid,
             name: j.name,
             properties: j.properties,
+            profile_overrides: Vec::new(),
             entity_id,
             sender: j.sender,
             latency: j.latency,
@@ -772,6 +787,7 @@ impl Guest {
             client_sprinting: false,
             replay: None,
             changes: Default::default(),
+            pings: Default::default(),
             moved: false,
             tab_hidden: Default::default(),
             loaded: false,
@@ -794,6 +810,7 @@ impl Guest {
             loaded_body: None,
             carried_attributes: None,
             carried_hit: None,
+            carried_ticks: None,
             saved_vehicle: None,
             logs_kept: None,
             inventory: vec![None; 36],
@@ -830,6 +847,7 @@ impl Guest {
             sent_shared: 0,
             glide_end_unsent: false,
             sent_pose: Pose::Standing,
+            sent_main_hand: 1,
             sent_skin: 0,
             sent_shoulders: [None; 2],
             sent_stuck: (0, 0),
@@ -889,6 +907,12 @@ impl Guest {
         }
         if self.record.is_some() {
             self.note_change(packet);
+        }
+        if let play::Clientbound::Ping(p) = packet {
+            self.pings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .sent(p.id, std::time::Instant::now());
         }
         match packet.try_encode() {
             Ok(body) => self.sender.send(body),
@@ -1046,6 +1070,18 @@ impl Guest {
     pub fn spectator(&self) -> bool {
         self.game_mode == SPECTATOR
     }
+    /// Whether handlePlayerPositionChange's moved-wrongly check applies (the
+    /// spectators and sleepers aside): not in creative, and not in the
+    /// server body's `LivingEntity.isInPostImpulseGraceTime` (the 40 ticks
+    /// after a wind charge's push, `ServerPlayer.onExplosionHit`, or a mace's
+    /// smash).
+    pub fn checks_wrong_moves(&self) -> bool {
+        !self.creative()
+            && !self
+                .motion
+                .as_ref()
+                .is_some_and(|m| m.impulse.is_in_grace_time())
+    }
     /// Its client's `minecraft:brand` is Horizon's: it reads the protocol's
     /// extensions, such as a native mod's particle (`Particle::horizon_only`).
     pub fn is_horizon(&self) -> bool {
@@ -1100,6 +1136,7 @@ impl Guest {
     pub fn new_body(&mut self, restore_all: bool) -> Option<Box<PlayerMotion>> {
         if !restore_all {
             self.carried_hit = None;
+            self.carried_ticks = None;
             self.death_canceled = false;
             self.death_time = 0;
         }
@@ -1107,6 +1144,7 @@ impl Guest {
         self.carried_attributes = Some(m.carried_attributes(restore_all));
         if restore_all {
             self.carried_hit = m.health.accepted_hit.take();
+            self.carried_ticks = Some(m.health.tick_count);
         }
         Some(m)
     }

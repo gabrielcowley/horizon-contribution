@@ -499,6 +499,8 @@ pub fn export_record(
                 since,
                 record: record.clone(),
             });
+            // Queued `player_move_packet` reports must not reach listeners after the snapshot.
+            g.move_packet_queue.clear();
         });
     }
     Ok(record)
@@ -992,6 +994,7 @@ mod hub_tests {
             next_entity: &mut next,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
@@ -1017,6 +1020,7 @@ mod hub_tests {
             next_entity: next,
             spawn: [0.5, 64.0, 0.5],
             spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
             difficulty: 2,
             difficulty_locked: false,
             clock_rate: 1.0,
