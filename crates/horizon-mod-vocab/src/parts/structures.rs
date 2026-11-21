@@ -6,6 +6,13 @@ pub(crate) fn installed_structure_type_list()
     installed().map_or(&[], |installed| installed.structure_types.as_slice())
 }
 
+/// The feature types registered at startup, for the executable to hand to the engine's feature
+/// decoder.
+pub(crate) fn installed_feature_type_list() -> &'static [crate::world::feature_type::FeatureTypeInfo]
+{
+    installed().map_or(&[], |installed| installed.feature_types.as_slice())
+}
+
 impl dyn Registrar + '_ {
     /// Register structure type `name` (`tower` or `mymod:tower`), the way
     /// NeoForge's registries `STRUCTURE_TYPE` and `STRUCTURE_PIECE` register
@@ -19,13 +26,28 @@ impl dyn Registrar + '_ {
     pub fn register_structure_type<T: crate::StructureType>(&mut self, name: &str, ty: T) {
         self.add_structure_type(name, Arc::new(ty));
     }
+    /// Register feature type `name` (`vein` or `mymod:vein`), the way NeoForge's registry
+    /// `FEATURE` registers once at startup: a data pack configured feature with
+    /// `"type": "mymod:vein"` (26.3's inline shape, its settings beside `type`) is then decoded
+    /// once by `ty` when the pack loads and placed by the feature it decoded wherever the game
+    /// places features: decoration, nested placed features, growth and `/place feature`. The
+    /// type's id is in a namespace owned by the calling mod's manifest; another mod's
+    /// namespace, an empty name and an id registered twice refuse the mods at startup, naming
+    /// the mod. Vanilla's own types keep their ids.
+    pub fn register_feature_type<T: crate::FeatureType>(&mut self, name: &str, ty: T) {
+        self.add_feature_type(name, Arc::new(ty));
+    }
 }
 
-/// Registrar operations for structures.
+/// Registrar operations for structures and worldgen features.
 pub trait StructuresRegistrar {
     /// Register structure type `name` with `ty`; mods reach it through
     /// `register_structure_type`.
     ///
     /// On WebAssembly, worker calls run under the linked group's store lock and call budget.
     fn add_structure_type(&mut self, name: &str, ty: Arc<dyn crate::StructureType>);
+    /// Register feature type `name` with `ty`; mods reach it through `register_feature_type`.
+    ///
+    /// On WebAssembly, worker calls run under the linked group's store lock and call budget.
+    fn add_feature_type(&mut self, name: &str, ty: Arc<dyn crate::FeatureType>);
 }

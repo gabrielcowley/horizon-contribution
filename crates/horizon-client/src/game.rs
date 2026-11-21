@@ -11242,6 +11242,8 @@ pub(crate) fn run_with(
     {
         log::warn!("Mod structure types already installed; keeping the first table");
     }
+    // Their feature types, which the data packs' configured features name.
+    native_feature_types::install();
     // The levels they registered, below the data packs of every world opened.
     if horizon_world::worldgen::overrides::install_mod_dimensions(
         native_dimensions::installed_dimensions(),
