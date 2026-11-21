@@ -49,11 +49,11 @@ impl FeatureType for VeinType {
             return Err(FeatureError("not an object".into()));
         };
         let targets = config
-            .get("targets")
+            .get(&"targets".into())
             .ok_or_else(|| FeatureError("no targets".into()))?;
         Ok(Arc::new(Vein {
             targets: decode.target_block_states(targets)?,
-            panics: config.get("panics").is_some(),
+            panics: config.get(&"panics".into()).is_some(),
         }))
     }
 }
