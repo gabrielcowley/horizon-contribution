@@ -130,6 +130,18 @@ pub(super) fn rewrite_dependencies(
                         ],
                     ));
                 }
+                // The build always supplies the SDK, so no feature can switch it off. Taking an
+                // optional one out would leave its `dep:` and `/` entries in `[features]` naming
+                // a dependency the manifest no longer has, which Cargo rejects.
+                if dep.get("optional").and_then(toml::Value::as_bool) == Some(true) {
+                    return Err(crate::i18n::trf(
+                        "{manifest}: {key} can't be optional; the build always supplies the mod API",
+                        &[
+                            ("manifest", &relative.join("Cargo.toml").display().to_string()),
+                            ("key", key),
+                        ],
+                    ));
+                }
                 // The root crate's feature requests are refused before the build (`prebuilt`):
                 // the SDK is compiled once, with its pinned features, for every crate.
                 let own_features = dep
@@ -393,6 +405,34 @@ mod tests {
                 .to_string()
             );
         }
+
+        // The SDK can't be optional, in a local crate or the root crate: removing it would leave
+        // a feature such as `dep:api` naming a dependency that is gone. Refused before Cargo runs.
+        for (relative, manifest) in [
+            (
+                "src/crates/helper",
+                "[package]\nname='helper'\nversion='0.1.0'\n[dependencies]\napi={package='horizon-mod-api',path='../../../.horizon/sdk/api/crates/horizon-mod-api',optional=true}\n[features]\nwith-api=['dep:api']\n",
+            ),
+            (
+                "",
+                "[package]\nname='fixture'\nversion='0.1.0'\n[dependencies]\nhorizon-mod-api={path='.horizon/sdk/api/crates/horizon-mod-api',optional=true}\n",
+            ),
+        ] {
+            let before = fs::read_to_string(input.path().join("Cargo.toml")).unwrap();
+            let path = input.path().join(relative).join("Cargo.toml");
+            fs::write(&path, manifest).unwrap();
+            let error = rewrite(relative).0.unwrap_err();
+            let shown = Path::new(relative).join("Cargo.toml").display().to_string();
+            assert!(
+                error.starts_with(&format!("{shown}: ")) && error.contains("can't be optional"),
+                "{error}"
+            );
+            if !relative.is_empty() {
+                assert_eq!(stage(&bundle, output.path()).unwrap_err(), error);
+            }
+            fs::write(input.path().join("Cargo.toml"), before).unwrap();
+        }
+        write_helper("itoa='1'");
 
         // A proc macro runs on the host, where the SDK's libraries don't link: refused before
         // the build, naming the crate. One that doesn't name the SDK is fine.

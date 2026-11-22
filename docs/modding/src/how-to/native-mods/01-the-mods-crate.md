@@ -85,7 +85,8 @@ horizon-mod-api = { path = "../../.horizon/sdk/api/crates/horizon-mod-api" }
 The launcher takes that dependency out and compiles the crate against the pinned SDK's libraries, as it does the
 root crate. Any other path to the SDK is refused under `E_SDK_SOURCE`, naming the path it expects. As in the root
 crate, the SDK comes with its pinned features: asking for others (`features`, or `default-features = false`) is
-refused under `E_NATIVE_FEATURES`. A proc-macro crate runs on the build machine, where the SDK's libraries don't
+refused under `E_NATIVE_FEATURES`. The SDK is always there, so it can't be `optional` either, in any crate: no
+feature can switch it off. A proc-macro crate runs on the build machine, where the SDK's libraries don't
 link, so it may not name the SDK at all: keep the API calls in the crates its macros expand into.
 `horizon-internals` is the root crate's alone: the facade is generated for the mod's crate. A mod with local
 crates builds with Cargo against the SDK, the route registry dependencies take.
