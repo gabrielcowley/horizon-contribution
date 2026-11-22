@@ -196,6 +196,12 @@ impl std::error::Error for JarConflict {}
 pub fn collect_jar_requirements<'a>(
     mods: impl IntoIterator<Item = (&'a str, &'a [JarRef])>,
 ) -> Result<Vec<JarRequirement>, JarConflict> {
+    collect(mods)
+}
+
+fn collect<'a, J: IntoIterator<Item = &'a JarRef>>(
+    mods: impl IntoIterator<Item = (&'a str, J)>,
+) -> Result<Vec<JarRequirement>, JarConflict> {
     let mut hashes: BTreeMap<&str, JarRequirement> = BTreeMap::new();
     for (owner, jars) in mods {
         for jar in jars {
@@ -227,14 +233,17 @@ pub fn collect_jar_requirements<'a>(
     Ok(hashes.into_values().collect())
 }
 
-/// The requirements an installation of `side` needs ([`JarRequirement::needed_on`]).
+/// The requirements an installation of `side` needs. Each declaration is filtered by
+/// [`JarRef::needed_on`] before owners are gathered, so a mod whose take of a shared file
+/// the installation skips neither owns that file's requirement nor conflicts over it.
 pub fn jar_requirements_for<'a>(
     side: Side,
     mods: impl IntoIterator<Item = (&'a str, &'a [JarRef])>,
 ) -> Result<Vec<JarRequirement>, JarConflict> {
-    let mut requirements = collect_jar_requirements(mods)?;
-    requirements.retain(|requirement| requirement.needed_on(side));
-    Ok(requirements)
+    collect(
+        mods.into_iter()
+            .map(move |(owner, jars)| (owner, jars.iter().filter(move |jar| jar.needed_on(side)))),
+    )
 }
 
 /// Missing exact files in a jar cache, with every requiring mod retained.
@@ -613,6 +622,25 @@ mod tests {
         assert_eq!(shared[0].owners, ["alpha", "beta"]);
         assert_eq!(shared[0].side, Side::Both);
         assert!(shared[0].needed_on(Side::Server));
+        let on_server = jar_requirements_for(
+            Side::Server,
+            [
+                ("alpha", std::slice::from_ref(&assets)),
+                ("beta", std::slice::from_ref(&data)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(on_server.len(), 1);
+        assert_eq!(on_server[0].owners, ["beta"]);
+        let on_client = jar_requirements_for(
+            Side::Client,
+            [
+                ("alpha", std::slice::from_ref(&assets)),
+                ("beta", std::slice::from_ref(&data)),
+            ],
+        )
+        .unwrap();
+        assert_eq!(on_client[0].owners, ["alpha", "beta"]);
 
         let recorded = serde_json::to_value(&client[0]).unwrap();
         assert_eq!(recorded["side"], "client");
