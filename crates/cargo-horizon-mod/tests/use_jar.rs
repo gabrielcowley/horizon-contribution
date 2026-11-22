@@ -137,7 +137,7 @@ fn use_jar_take_records_checked_prefixes_and_refuses_one_matching_nothing() {
     let root = scratch.path();
     let binary = env!("CARGO_BIN_EXE_cargo-horizon-mod");
     let created = Command::new(binary)
-        .current_dir(&root)
+        .current_dir(root)
         .args(["new", "port"])
         .output()
         .unwrap();
