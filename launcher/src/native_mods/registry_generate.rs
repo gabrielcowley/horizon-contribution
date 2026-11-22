@@ -130,10 +130,12 @@ pub(super) fn rewrite_dependencies(
                         ],
                     ));
                 }
-                // The build always supplies the SDK, so no feature can switch it off. Taking an
-                // optional one out would leave its `dep:` and `/` entries in `[features]` naming
-                // a dependency the manifest no longer has, which Cargo rejects.
-                if dep.get("optional").and_then(toml::Value::as_bool) == Some(true) {
+                // The build always supplies the SDK, so no feature can switch it off. Taking a
+                // local crate's optional one out would leave its `dep:` and `/` entries in
+                // `[features]` naming a dependency the manifest no longer has, which Cargo
+                // rejects. The root crate may keep one: its `[features]` are refused outright
+                // (`prebuilt`), so nothing can name it, and existing mods keep building.
+                if local && dep.get("optional").and_then(toml::Value::as_bool) == Some(true) {
                     return Err(crate::i18n::trf(
                         "{manifest}: {key} can't be optional; the build always supplies the mod API",
                         &[
@@ -406,33 +408,36 @@ mod tests {
             );
         }
 
-        // The SDK can't be optional, in a local crate or the root crate: removing it would leave
-        // a feature such as `dep:api` naming a dependency that is gone. Refused before Cargo runs.
-        for (relative, manifest) in [
-            (
-                "src/crates/helper",
-                "[package]\nname='helper'\nversion='0.1.0'\n[dependencies]\napi={package='horizon-mod-api',path='../../../.horizon/sdk/api/crates/horizon-mod-api',optional=true}\n[features]\nwith-api=['dep:api']\n",
-            ),
-            (
-                "",
-                "[package]\nname='fixture'\nversion='0.1.0'\n[dependencies]\nhorizon-mod-api={path='.horizon/sdk/api/crates/horizon-mod-api',optional=true}\n",
-            ),
-        ] {
-            let before = fs::read_to_string(input.path().join("Cargo.toml")).unwrap();
-            let path = input.path().join(relative).join("Cargo.toml");
-            fs::write(&path, manifest).unwrap();
-            let error = rewrite(relative).0.unwrap_err();
-            let shown = Path::new(relative).join("Cargo.toml").display().to_string();
-            assert!(
-                error.starts_with(&format!("{shown}: ")) && error.contains("can't be optional"),
-                "{error}"
-            );
-            if !relative.is_empty() {
-                assert_eq!(stage(&bundle, output.path()).unwrap_err(), error);
-            }
-            fs::write(input.path().join("Cargo.toml"), before).unwrap();
-        }
+        // A local crate's SDK can't be optional: removing it would leave a feature such as
+        // `dep:api` naming a dependency that is gone. Refused before Cargo runs, naming the crate.
+        write_helper(
+            "api={package='horizon-mod-api',path='../../../.horizon/sdk/api/crates/horizon-mod-api',optional=true}\n[features]\nwith-api=['dep:api']",
+        );
+        let error = rewrite("src/crates/helper").0.unwrap_err();
+        assert_eq!(
+            error,
+            "src/crates/helper/Cargo.toml: api can't be optional; the build always supplies the mod API"
+        );
+        assert_eq!(stage(&bundle, output.path()).unwrap_err(), error);
         write_helper("itoa='1'");
+
+        // The root crate may keep an optional SDK, as before: its `[features]` are refused
+        // outright, so nothing names it once it is taken out.
+        let root = fs::read_to_string(input.path().join("Cargo.toml")).unwrap();
+        let optional = root.replace(
+            "horizon-mod-api={ path='.horizon/sdk/api/crates/horizon-mod-api' }",
+            "horizon-mod-api={ path='.horizon/sdk/api/crates/horizon-mod-api', optional=true }",
+        );
+        assert_ne!(optional, root);
+        fs::write(input.path().join("Cargo.toml"), optional).unwrap();
+        let (named, manifest, _) = rewrite("");
+        assert_eq!(named.unwrap(), [("mod_api".to_owned(), "mod_api")]);
+        assert!(!manifest["dependencies"]
+            .as_table()
+            .unwrap()
+            .contains_key("horizon-mod-api"));
+        stage(&bundle, output.path()).unwrap();
+        fs::write(input.path().join("Cargo.toml"), root).unwrap();
 
         // A proc macro runs on the host, where the SDK's libraries don't link: refused before
         // the build, naming the crate. One that doesn't name the SDK is fine.
