@@ -37,6 +37,9 @@ pub(super) fn initialize(resources: &MotionResources, guest: &mut Guest) -> bool
     {
         let _ = m.apply_saved_attributes(Some(&carried));
     }
+    if let (Some(m), Some(ticks)) = (guest.motion.as_mut(), guest.carried_ticks.take()) {
+        m.health.tick_count = ticks;
+    }
     // The saved golden hearts go on the first body of a player who
     // has been here before.
     let saved = guest.saved_absorption.take();
@@ -147,10 +150,17 @@ impl Game<'_> {
             let freeze_immune = game.wears_freeze_immune();
             let burn_immune = game.wears_burn_from_stepping_immunity();
             let boat = game.riding_boat_fluid_box();
+            // LivingEntity.getAirSupply reduction: the helmet's Respiration
+            // level, which the window's sync_player_body sets but a served
+            // guest's own body tick must set too.
+            let respiration = game.armor[0]
+                .as_ref()
+                .map_or(0, |s| s.enchantment_level("minecraft:respiration") as i32);
             let Some(player) = game.player.as_mut() else {
                 return (Vec::new(), None);
             };
             player.fluids.boat = boat;
+            player.respiration = respiration;
             let mut w = MotionWorld {
                 entities: &[],
                 player,
@@ -325,6 +335,10 @@ impl Game<'_> {
                 block_registries: Some(&game.pack.block_registries),
             }
             .server_travel();
+            // LivingEntity.tick, after aiStep: the post-impulse grace counts
+            // down, so a wind charge spares the moved-wrongly check and the
+            // impulse reset for 40 ticks, not for good.
+            player.impulse.tick_grace_time();
             // Player.aiStep's entity contacts run with the player's body,
             // even when the level and its mobs are frozen. Flush their damage
             // events and marked velocity through the existing guest path.
@@ -594,3 +608,10 @@ impl Game<'_> {
 #[cfg(test)]
 #[path = "guest_body/tests.rs"]
 mod tests;
+
+impl Game<'_> {
+    /// `Entity.tickCount` of the player in place (the guest swapped in, or the host).
+    pub(in crate::game) fn own_tick_count(&self) -> Option<i32> {
+        self.player.as_ref().map(|p| p.health.tick_count)
+    }
+}

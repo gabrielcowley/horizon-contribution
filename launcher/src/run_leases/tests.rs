@@ -89,6 +89,7 @@ fn killed_holder_releases_production_home_source_and_parent_leases() {
     let mut actor = Actor(
         Command::new(std::env::current_exe().unwrap())
             .args([
+                "--include-ignored",
                 "--exact",
                 "run_leases::tests::lease_holder_actor",
                 "--nocapture",
@@ -188,7 +189,12 @@ fn routed_lifetime(stop: bool) {
         .success());
     let mut supervisor = Actor(
         Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "run_leases::tests::routing_actor", "--nocapture"])
+            .args([
+                "--include-ignored",
+                "--exact",
+                "run_leases::tests::routing_actor",
+                "--nocapture",
+            ])
             .env("ROUTING_ROOT", &data)
             .env("ROUTING_MODE", "launcher")
             .env("ROUTING_STOP", if stop { "1" } else { "0" })
@@ -280,7 +286,7 @@ fn routing_actor() {
         game.args(["--exact", "run_leases::tests::routing_actor"])
             .env("ROUTING_MODE", "game")
             .current_dir(root.join("instances/player"));
-        let mut game = crate::launch::wrap(game, &crate::launch::Launch::default());
+        let mut game = crate::launch::wrap(game, &crate::launch::Launch::default()).unwrap();
         // A wrapper may consume engine arguments before starting libtest's receiver.
         // Preserve the declared engine command, whose cwd differs from this launcher.
         let words: Vec<std::ffi::OsString> = [
@@ -354,6 +360,7 @@ fn data_directory_leaf_never_leases_ancestors_outside_data() {
     let root = tempfile::tempdir().unwrap();
     assert!(Command::new(std::env::current_exe().unwrap())
         .args([
+            "--include-ignored",
             "--exact",
             "run_leases::tests::data_directory_leaf_never_leases_ancestors_outside_data"
         ])
@@ -385,7 +392,7 @@ fn a_java_editions_command_is_not_read_as_horizons() {
     ])
     .current_dir(root.path())
     .env("HORIZON_HOME", root.path().join("logs"));
-    let java = crate::launch::wrap(java, &crate::launch::Launch::default());
+    let java = crate::launch::wrap(java, &crate::launch::Launch::default()).unwrap();
     shared(&java)
         .map_err(crate::native_mods::cache_error)
         .unwrap();
@@ -394,7 +401,7 @@ fn a_java_editions_command_is_not_read_as_horizons() {
     let mut game = Command::new(root.path().join("horizon-client"));
     game.current_dir(root.path());
     mark(&mut game, root.path());
-    let game = crate::launch::wrap(game, &crate::launch::Launch::default());
+    let game = crate::launch::wrap(game, &crate::launch::Launch::default()).unwrap();
     assert!(override_value(&game, GAME).is_some());
 }
 
@@ -405,7 +412,7 @@ fn java_edition(java: &Path, home: &Path, logs: &Path) -> Command {
         .args(["-cp", "client.jar", "net.minecraft.client.main.Main"])
         .current_dir(home)
         .env("HORIZON_HOME", logs);
-    crate::launch::wrap(command, &crate::launch::Launch::default())
+    crate::launch::wrap(command, &crate::launch::Launch::default()).unwrap()
 }
 
 #[test]
