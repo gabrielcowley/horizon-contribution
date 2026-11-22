@@ -987,8 +987,8 @@ impl Game<'_> {
         }
     }
 
-    /// `Block.updateEntityAfterFallOn` for a part's block, told mid-move over a lent
-    /// level as the item's other contacts are: the contact actions it queues join
+    /// A part's block after the landing (`Entity.restituteMovementAfterCollisions`), told mid-move
+    /// over a lent level as the item's other contacts are: the contact actions it queues join
     /// `actions`, for the entity's own tick.
     pub(in crate::game) fn fire_batch_after_fall_on(
         &mut self,
@@ -1056,7 +1056,8 @@ impl Game<'_> {
         }
         let mut actions = Vec::new();
         if !client {
-            // `Block.updateEntityAfterFallOn`, at the end of the item's move.
+            // After the landing response (`Entity.restituteMovementAfterCollisions`), at the end of
+            // the item's move.
             if let Some(pos) = step.vertical_contact {
                 self.fire_batch_after_fall_on(item.id as i32, "minecraft:item", pos, &mut actions);
             }

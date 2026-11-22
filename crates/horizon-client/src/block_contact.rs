@@ -238,8 +238,8 @@ pub struct Hooks {
         &mut Vec<InsideWrite>,
         &mut Vec<mod_api::ContactAction>,
     ),
-    /// `Block.updateEntityAfterFallOn` told mid-move: the part's own contact actions,
-    /// queued for the entity's own tick.
+    /// A landing (after `Entity.restituteMovementAfterCollisions`) told mid-move: the part's own
+    /// contact actions, queued for the entity's own tick.
     pub after_fall_on_listens: fn(BlockStateId) -> bool,
     pub after_fall_on:
         fn(&str, &mut DamageLevel<'_>, Contact<'_>, &mut Vec<mod_api::ContactAction>),

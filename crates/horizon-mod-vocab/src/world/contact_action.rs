@@ -17,7 +17,8 @@ use crate::wire::{Reader, Wire, WireError, Writer};
 pub enum ContactMoment {
     /// `Block.entityInside`: the entity's block sweep crossed the block.
     Inside,
-    /// `Block.updateEntityAfterFallOn`: the entity's move ended on top of the block.
+    /// The entity's move ended on top of the block, after vanilla's landing response
+    /// (`Entity.restituteMovementAfterCollisions`).
     AfterFallOn,
 }
 
@@ -62,7 +63,7 @@ impl ContactAction {
 ///
 /// The game fills it from the entity when it calls the action and writes the fields
 /// back after the call: what the part changes here is what the entity keeps, in its own
-/// tick, as vanilla's `entityInside` and `updateEntityAfterFallOn` write the entity
+/// tick, as vanilla's `entityInside` and landing response write the entity
 /// directly. Non-finite positions or movements are not written back.
 // exhaustive: the swept entity's writable record is a closed snapshot the game fills and reads back.
 #[derive(Clone, Debug, Default, PartialEq, horizon_mod_api_macros::Wire)]

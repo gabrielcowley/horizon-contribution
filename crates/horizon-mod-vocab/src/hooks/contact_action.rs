@@ -8,7 +8,7 @@ pub trait Hooks {
         scope = "block",
         key = "state",
         isolate = true,
-        neoforge = "none (the deferred half of vanilla Block.entityInside / updateEntityAfterFallOn)"
+        neoforge = "none (the deferred half of vanilla Block.entityInside, and of the landing in Entity.restituteMovementAfterCollisions)"
     )]
     fn contact_action(
         dimension: &str,

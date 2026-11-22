@@ -890,7 +890,8 @@ impl Mob {
             }
         }
     }
-    /// `Block.updateEntityAfterFallOn` for a part's block, told on the mob's lent level.
+    /// A part's block after the landing (`Entity.restituteMovementAfterCollisions`), told on
+    /// the mob's lent level.
     /// Nothing runs where no part listens or no server level is in scope.
     fn after_fall_on_contact(
         &mut self,

@@ -1737,10 +1737,11 @@ impl MotionWorld<'_, '_, '_> {
             self.player.client_contacts.push((moment, state, p));
         }
     }
-    /// `Block.updateEntityAfterFallOn` for a part's block: a move of this player ended on
-    /// top of `state` at `p`. The part is told on the level random host, and the contact
-    /// actions it queues wait in the player for the game to call back in its own turn.
-    /// Nothing runs where no part listens or no server level is in scope.
+    /// A part's block after the landing: a move of this player ended on top of `state` at `p`.
+    /// Horizon's own moment on the server, which in vanilla runs no landing response for a player's
+    /// move (`Entity.restituteMovementAfterCollisions` is the client's). The part is told on the
+    /// level random host, and the contact actions it queues wait in the player for the game to call
+    /// back in its own turn. Nothing runs where no part listens or no server level is in scope.
     pub fn after_fall_on_contact(&mut self, state: BlockStateId, p: BlockPos) {
         let Some(dimension) = crate::block_contact::current_level() else {
             return;
