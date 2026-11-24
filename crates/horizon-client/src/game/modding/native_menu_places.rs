@@ -408,11 +408,16 @@ impl Game<'_> {
         let Some((backed_window, count, locked)) = self.menu_places_of(conn) else {
             return false;
         };
-        let Some(size) = self
-            .lan
-            .as_ref()
-            .and_then(|lan| Some(lan.hub.guest(conn)?.menu.as_ref()?.size))
-        else {
+        let Some((size, hidden)) = self.lan.as_ref().and_then(|lan| {
+            let size = lan.hub.guest(conn)?.menu.as_ref()?.size;
+            let hidden = lan
+                .menus
+                .get(&conn)
+                .and_then(|m| m.blockless_hidden.as_ref())
+                .filter(|(w, _)| *w == window)
+                .map_or_else(Vec::new, |(_, hidden)| hidden.clone());
+            Some((size, hidden))
+        }) else {
             return false;
         };
         if backed_window != window {
@@ -439,6 +444,10 @@ impl Game<'_> {
         if !(pickup || mode == 1) || (count..size).contains(&at) || at >= size + 36 {
             return false;
         }
+        // A slot the menu's `menu_screen` hides takes no click: nothing goes in or out.
+        if hidden.contains(&at) {
+            return true;
+        }
         let inventory = native_menu_inventory_slot(size, slot);
         // The held backpack's own slot takes no click, so it can't go into itself; a click that
         // takes a mod place's backpack out of its place is undone, for the same reason.
@@ -449,7 +458,7 @@ impl Game<'_> {
                 if pickup {
                     click_pickup(host, menu, at, button == 1);
                 } else {
-                    click_quick_move(host, menu, at, size, count);
+                    click_quick_move(host, menu, at, size, count, &hidden);
                 }
                 match mod_places_bound(host, &bound) {
                     true => Ok(()),
@@ -510,13 +519,14 @@ fn click_pickup(host: &mut dyn ServerHost, menu: MenuRef, at: usize, right: bool
 /// `QUICK_MOVE` on menu slot `at` of a menu of `size` container slots, `count` of them backed
 /// (`ChestMenu.quickMoveStack`): a container slot's stack goes to the inventory, hotbar end
 /// first; an inventory slot's into the backed slots in order. Onto matching stacks first, then
-/// into empty slots (`moveItemStackTo`), all or nothing.
+/// into empty slots (`moveItemStackTo`), all or nothing. A `hidden` slot is skipped.
 fn click_quick_move(
     host: &mut dyn ServerHost,
     menu: MenuRef,
     at: usize,
     size: usize,
     count: usize,
+    hidden: &[usize],
 ) {
     let from = ItemPlace::MenuSlot { menu, slot: at };
     let Some(resource) = from.resource(host) else {
@@ -538,6 +548,9 @@ fn click_quick_move(
                 } else {
                     first + i
                 };
+                if hidden.contains(&slot) {
+                    continue;
+                }
                 let to = ItemPlace::MenuSlot { menu, slot };
                 match to.resource(host) {
                     Some(here) if merge && here == resource => {}

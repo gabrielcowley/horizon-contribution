@@ -291,11 +291,15 @@ if let Some(window) = window {
 ```
 
 For a blockless content menu, register a `MenuPart` with `Registrar::menu_part` using the menu's id
-and return a `Screen` from `MenuPart::menu_screen`. Provide a finite coordinate pair for every
-container slot declared by the menu type, in slot order. Choose positions that make the slots
-usable on the screen. Use the screen render and input hooks for custom controls, matching
-`ScreenView::menu` to the same menu id. A block's own menu still uses its block screen, including
-any registered recipe-book layout.
+and return a `Screen` from `MenuPart::menu_screen`. Give each container slot of the menu type, in slot
+order, a finite coordinate pair, or `None` to hide it; slots past the list are hidden too. The server
+asks `menu_screen` as well when `open_mod_menu` opens the menu, and no click on the backed slots moves
+an item into or out of a hidden one: a shift-click never fills it, as for a block's `screen`. While `menu_screen` answers,
+`screen_extra_data` and `screen_pos` read the `extra` and `pos` given to `open_mod_menu`, on both
+sides, so a menu whose visible slots follow its state (a filter's mode) can lay itself out from them.
+Use the screen render and input hooks for custom controls, matching `ScreenView::menu` to the same
+menu id. A block's own menu still uses its block screen, including any registered recipe-book
+layout.
 
 A vanilla menu and a menu no mod backed never take this path: their slots keep the backing they had.
 

@@ -28,13 +28,23 @@ impl Game<'_> {
     /// The block of the mod screen that is open (`native_screen`), as the
     /// server named it when the block opened its menu type; None when no mod
     /// screen is open. 401.
+    /// Also, while `menu_screen` is asked for a blockless menu, the `pos`
+    /// its opener gave (None when it gave none).
     pub(in crate::game) fn screen_pos(&self) -> Option<[i32; 3]> {
+        if let Some((_, pos)) = menu_screen_opening() {
+            return pos;
+        }
         self.shown_native_screen()?.pos()
     }
     /// What the block's mod wrote for the mod screen that is open
     /// (`native_menu_extra_data` on the server), empty when it wrote nothing;
     /// None when no mod screen is open. @API:menu_extra_data@.
+    /// Also, while `menu_screen` is asked for a blockless menu, the `extra`
+    /// its opener gave, on the server as on the client.
     pub(in crate::game) fn screen_extra_data(&self) -> Option<Vec<u8>> {
+        if let Some((extra, _)) = menu_screen_opening() {
+            return Some(extra);
+        }
         let screen = self.shown_native_screen()?;
         Some(
             screen
@@ -66,4 +76,34 @@ impl Game<'_> {
             Err(e) => log::debug!("Horizon: a bad menu extra payload: {e}"),
         }
     }
+}
+
+thread_local! {
+    /// The `extra` and `pos` of the blockless menu whose `menu_screen` is being
+    /// asked on this thread, for `screen_extra_data` and `screen_pos`.
+    static OPENING: std::cell::RefCell<Option<(Vec<u8>, Option<[i32; 3]>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// While alive, `screen_extra_data` and `screen_pos` answer with the opening
+/// menu's `extra` and `pos` (see [`menu_screen_opening`]).
+pub(in crate::game) struct MenuScreenOpening(Option<(Vec<u8>, Option<[i32; 3]>)>);
+
+impl MenuScreenOpening {
+    pub(in crate::game) fn enter(extra: &[u8], pos: Option<[i32; 3]>) -> Self {
+        Self(OPENING.with(|o| o.replace(Some((extra.to_vec(), pos)))))
+    }
+}
+
+impl Drop for MenuScreenOpening {
+    fn drop(&mut self) {
+        let outer = self.0.take();
+        OPENING.with(|o| *o.borrow_mut() = outer);
+    }
+}
+
+/// The `extra` and `pos` of the blockless menu whose `menu_screen` is being
+/// asked on this thread, None outside that call.
+fn menu_screen_opening() -> Option<(Vec<u8>, Option<[i32; 3]>)> {
+    OPENING.with(|o| o.borrow().clone())
 }

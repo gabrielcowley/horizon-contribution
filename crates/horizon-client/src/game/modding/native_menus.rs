@@ -149,6 +149,9 @@ impl Game<'_> {
         if !self.guest_may_open(conn, &id, pos) {
             return Ok(None);
         }
+        // The slots its `menu_screen` leaves out take no item on the server either,
+        // as for a block's `screen`: a shift-click never fills them.
+        let hidden = self.blockless_hidden_slots(&id, &extra, pos, kind.slots);
         self.close_for_open(conn, replace);
         let host = self.lan.as_mut().ok_or(OpenMenuError::PlayerUnavailable)?;
         let window = host.hub.open_menu_window(
@@ -160,7 +163,9 @@ impl Game<'_> {
             vec![None; kind.slots],
             Some(extra),
         );
-        if window.is_some() {
+        if let Some(window) = window {
+            host.menus.entry(conn).or_default().blockless_hidden =
+                (!hidden.is_empty()).then_some((window, hidden));
             self.player_menu_opening(conn);
         }
         Ok(window)

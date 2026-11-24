@@ -22,6 +22,10 @@ pub(in crate::game) struct GuestMenus {
     /// The storage a mod backed its open menu's slots with (`player_back_mod_menu_slots`);
     /// None for every menu no mod backed.
     pub(in crate::game) slot_places: Option<super::native_menu_places::MenuSlotPlaces>,
+    /// The container slots the `menu_screen` of a blockless mod menu hides, with that menu's
+    /// window: no click on its backed slots moves an item into or out of them. Another window
+    /// leaves it stale, never read.
+    pub(in crate::game) blockless_hidden: Option<(i32, Vec<usize>)>,
     /// The crafting table or workstation a mod opened with no block
     /// (game/modding/native_stations.rs); None for every other menu.
     pub(in crate::game) portable: Option<super::native_stations::PortableStation>,

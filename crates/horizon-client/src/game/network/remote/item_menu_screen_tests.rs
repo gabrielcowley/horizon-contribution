@@ -42,14 +42,19 @@ struct Storage;
 impl MenuPart for Storage {
     fn menu_screen(
         &self,
-        _: &dyn ClientHost,
+        host: &dyn ClientHost,
         event: &mut MenuScreenEvent<'_>,
     ) -> Option<mod_api::Screen> {
         assert_eq!(event.menu, MENU);
+        // The opener's extra picks the layout: [9] shows the first slot only.
+        let slots = match host.screen_extra_data().as_deref() {
+            Some([9]) => vec![Some([29.0, 20.0])],
+            _ => vec![Some([29.0, 20.0]), Some([80.0, 30.0])],
+        };
         Some(mod_api::Screen {
             width: 196.0,
             height: 154.0,
-            slots: vec![Some([29.0, 20.0]), Some([80.0, 30.0])],
+            slots,
             inventory_x: 18.0,
             inventory_y: 72.0,
             ..Default::default()
@@ -206,7 +211,7 @@ fn take_menu_packets(rx: &mpsc::Receiver<Out>) -> Vec<C> {
         .collect()
 }
 
-fn open_item_menu(game: &mut Game<'_>, uuid: u128) -> i32 {
+fn open_item_menu(game: &mut Game<'_>, uuid: u128, extra: u8) -> i32 {
     let host: &mut dyn ServerHost = game;
     let player = host.player(uuid).unwrap();
     let menu = host
@@ -219,7 +224,7 @@ fn open_item_menu(game: &mut Game<'_>, uuid: u128) -> i32 {
             host,
             menu,
             mod_api::Text::literal("Held storage"),
-            vec![7],
+            vec![extra],
             None,
             MenuReplace::InPlace,
         )
@@ -243,6 +248,7 @@ struct MenuPackets {
     block: Vec<C>,
     item: Vec<C>,
     after_move: Vec<C>,
+    hidden_layout: Vec<C>,
     chest_block: Vec<C>,
     chest_item: Vec<C>,
 }
@@ -271,7 +277,7 @@ fn server_menu_packets(game: &mut Game<'_>, conn: u32) -> MenuPackets {
     assert_eq!(game.native_hidden_slots(MACHINE_POS, 2), [1]);
     let block = take_menu_packets(&rx);
 
-    let window = open_item_menu(game, uuid);
+    let window = open_item_menu(game, uuid, 7);
     let item = take_menu_packets(&rx);
     let state = item
         .iter()
@@ -308,6 +314,51 @@ fn server_menu_packets(game: &mut Game<'_>, conn: u32) -> MenuPackets {
         "the move writes through the held item"
     );
     let after_move = take_menu_packets(&rx);
+
+    // Opened with [9], the layout hides slot 1: the server's menu takes nothing into it.
+    let window = open_item_menu(game, uuid, 9);
+    let hidden_layout = take_menu_packets(&rx);
+    let state = hidden_layout
+        .iter()
+        .filter_map(|packet| match packet {
+            C::ContainerSetContent(content) if content.container == window => Some(content.state),
+            _ => None,
+        })
+        .next_back()
+        .unwrap();
+    // 7 stone already fill held slot 0 (put there above); 64 more cobblestone
+    // would go to slot 1, but it is hidden, so they stay in the inventory.
+    game.lan
+        .as_mut()
+        .unwrap()
+        .hub
+        .update_guest(conn, |player| {
+            player.inventory[10] = Some(ItemStack::new("minecraft:cobblestone", 64));
+        })
+        .unwrap();
+    game.lan_guest_packet(
+        conn,
+        S::ContainerClick(play::ContainerClick {
+            container: window,
+            state,
+            slot: 3,
+            button: 0,
+            input: 1,
+            changed: Vec::new(),
+            carried: None,
+        }),
+    );
+    game.run_native_menu_events();
+    let held_slot = |slot| ItemPlace::Nested {
+        parent: Box::new(ItemPlace::PlayerHand {
+            player: uuid,
+            hand: mod_api::Hand::Main,
+        }),
+        slot,
+    };
+    assert_eq!(held_slot(1).amount(game), 0, "a hidden slot is never filled");
+    assert_eq!(held_slot(0).amount(game), 7);
+    let _ = take_menu_packets(&rx);
     place_machine(game, CHEST_BLOCK, 9);
     assert!(game.lan_open_container(conn, MACHINE_POS));
     let chest_block = take_menu_packets(&rx);
@@ -331,6 +382,7 @@ fn server_menu_packets(game: &mut Game<'_>, conn: u32) -> MenuPackets {
         block,
         item,
         after_move,
+        hidden_layout,
         chest_block,
         chest_item,
     }
@@ -384,6 +436,11 @@ fn check_client_menus(game: &mut Game<'_>, packets: MenuPackets) {
         "the client shows the new stack in the declared slot"
     );
     assert!(slots[1].is_none());
+
+    // Opened with [9], the client's layout hides slot 1, as the server's menu does.
+    apply(game, packets.hidden_layout);
+    assert_eq!(game.screen_extra_data(), Some(vec![9]));
+    assert_eq!(game.native_screen_slots(), Some(vec![300]));
 
     check_chest_screen_origins(game, packets.chest_block, packets.chest_item);
 }

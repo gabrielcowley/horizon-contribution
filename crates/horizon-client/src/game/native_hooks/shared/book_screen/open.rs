@@ -42,22 +42,36 @@ impl Game<'_> {
         (opens == Some(menu)).then(|| block.to_string())
     }
 
-    /// The client layout for a content menu that has no matching block
-    /// container. Every declared slot needs a finite coordinate pair.
+    /// The layout `menu_screen` gives content menu `menu` opened with no
+    /// matching block container, from `extra` and `pos` (what the opener gave
+    /// `player_open_mod_menu`, which the part reads with `screen_extra_data`
+    /// and `screen_pos` while it answers). A slot it leaves `None`, or past its
+    /// list, is hidden; every slot it places needs finite coordinates. Asked on
+    /// the client to show the screen and on the server to hide those slots.
     /// The recipe-book layout's server placement is scoped to a block container.
-    fn blockless_menu_screen(&self, menu: &str) -> Option<mod_api::Screen> {
+    pub(in crate::game) fn blockless_menu_screen(
+        &self,
+        menu: &str,
+        extra: &[u8],
+        pos: Option<[i32; 3]>,
+    ) -> Option<mod_api::Screen> {
         let menu_type = horizon_client::containers::mod_menu_type(menu)?;
         let mut screen = None;
-        self.native_menu_screen(mod_api::__private::MenuScreenCall {
-            menu,
-            screen: &mut screen,
-        });
+        {
+            let _opening =
+                crate::game::native_hooks::menu_extra_data::MenuScreenOpening::enter(extra, pos);
+            self.native_menu_screen(mod_api::__private::MenuScreenCall {
+                menu,
+                screen: &mut screen,
+            });
+        }
         let screen = screen?;
-        if screen.slots.len() != menu_type.slots
+        if screen.slots.len() > menu_type.slots
             || screen
                 .slots
                 .iter()
-                .any(|slot| slot.is_none_or(|pos| pos.into_iter().any(|coord| !coord.is_finite())))
+                .flatten()
+                .any(|pos| pos.iter().any(|coord| !coord.is_finite()))
             || ![screen.width, screen.height]
                 .into_iter()
                 .all(|size| size.is_finite() && size > 0.0)
@@ -66,12 +80,31 @@ impl Game<'_> {
                 .all(f32::is_finite)
         {
             log::warn!(
-                "Horizon: menu_screen for {menu} must have finite geometry and place all {} container slots",
+                "Horizon: menu_screen for {menu} must have finite geometry and at most {} container slots",
                 menu_type.slots
             );
             return None;
         }
         Some(screen)
+    }
+
+    /// The container slots (of `size`) that `menu_screen` hides for content
+    /// menu `menu` opened with no block: on the server, no click on the menu's
+    /// backed slots reaches them, as [`Self::native_hidden_slots`] keeps a
+    /// block's screen's hidden slots out of its menu.
+    pub(in crate::game) fn blockless_hidden_slots(
+        &self,
+        menu: &str,
+        extra: &[u8],
+        pos: Option<[i32; 3]>,
+        size: usize,
+    ) -> Vec<usize> {
+        let Some(screen) = self.blockless_menu_screen(menu, extra, pos) else {
+            return Vec::new();
+        };
+        (0..size)
+            .filter(|&i| screen.slots.get(i).is_none_or(Option::is_none))
+            .collect()
     }
 
     /// Open the matching block's screen or the content menu type's layout.
@@ -95,7 +128,10 @@ impl Game<'_> {
                 }
                 screen
             }
-            None => self.blockless_menu_screen(menu),
+            None => {
+                let data = extra.as_ref().map_or(&[][..], |e| e.data.as_slice());
+                self.blockless_menu_screen(menu, data, extra.as_ref().and_then(|e| e.pos))
+            }
         };
         if let Some(screen) = screen {
             self.mod_screen = Some(OpenNativeScreen {
