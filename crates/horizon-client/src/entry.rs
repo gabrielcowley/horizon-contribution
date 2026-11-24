@@ -247,6 +247,10 @@ pub fn start<G>(
     }
     horizon_hooks::engine::shutdown();
     logging::flush();
+    // `/restart`: the world is saved; the supervisor reads this code as "start the game again".
+    if game::exit_code::restart_requested() {
+        std::process::exit(game::exit_code::RESTART);
+    }
 }
 
 pub(crate) fn install_client_hooks() {
@@ -274,6 +278,12 @@ pub(crate) fn install_client_hooks() {
             let reader = horizon_client_render::api_context::LoopReader(context);
             let context = reader.context();
             mod_api::dispatch_living_breathe(&context, entity, kind, can_breathe, consume, refill);
+        },
+        player_login_profile: |player, name, properties| {
+            if !mod_api::__private::listened(mod_api::HookId::PlayerLoginProfile) {
+                return;
+            }
+            mod_api::dispatch_player_login_profile(player, name, properties);
         },
         farmland_trample: |context, entity, pos, state, distance, cancel| {
             if !mod_api::__private::listened(mod_api::HookId::FarmlandTrample) {
