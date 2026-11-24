@@ -38,9 +38,7 @@ const NAMED_BLOCKS: &str = "
     copper_bulb glow_lichen hanging_roots mangrove_roots nether_portal chain_command_block
     frogspawn turtle_egg sniffer_egg sea_pickle coarse_dirt rooted_dirt crimson_nylium warped_nylium
 ";
-const SYNTHETIC_BLOCKS: usize = 0;
-const SYNTHETIC_TAGS: usize = 0;
-const TAG_COUNT: usize = SYNTHETIC_TAGS + 3;
+const TAG_COUNT: usize = 3;
 
 struct Scratch(PathBuf);
 impl Scratch {
@@ -65,10 +63,6 @@ fn write_json(root: &Path, file: &str, value: Value) -> io::Result<()> {
     serde_json::to_writer(fs::File::create(root.join(file))?, &value).map_err(io::Error::other)
 }
 
-fn block_name(id: usize) -> String {
-    format!("bench:block_{id:04}")
-}
-
 fn write_tags(root: &Path) -> io::Result<()> {
     let mut tags = Map::new();
     for (tag, members) in [
@@ -89,23 +83,6 @@ fn write_tags(root: &Path) -> io::Result<()> {
     ] {
         tags.insert(
             format!("minecraft:{tag}"),
-            json!({ "values": members }).to_string().into(),
-        );
-    }
-    // Vary tag key lengths and membership rather than loading an isolated key
-    // or duplicating a captured game registry. All synthetic block names resolve.
-    let families = [
-        "ground",
-        "connects_to",
-        "surface_support",
-        "valid_substrates",
-    ];
-    for i in 0..SYNTHETIC_TAGS {
-        let members = (0..1 + i % 32)
-            .map(|j| block_name((31 * i + 13 * j) % SYNTHETIC_BLOCKS))
-            .collect::<Vec<_>>();
-        tags.insert(
-            format!("bench:{}/group_{i:03}", families[i % families.len()]),
             json!({ "values": members }).to_string().into(),
         );
     }
@@ -176,7 +153,6 @@ pub(super) fn load() -> io::Result<(BlockRegistry, Behaviours)> {
     for name in NAMED_BLOCKS
         .split_whitespace()
         .map(|name| format!("minecraft:{name}"))
-        .chain((0..SYNTHETIC_BLOCKS).map(block_name))
     {
         let liquid = matches!(name.as_str(), "minecraft:water" | "minecraft:lava");
         let air = matches!(
