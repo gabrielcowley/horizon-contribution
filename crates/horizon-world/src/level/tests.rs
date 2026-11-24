@@ -50,6 +50,8 @@ pub(crate) struct TestLevel {
     /// `Level.isClientSide`.
     pub client_side: bool,
     pub cake_answer: Option<bool>,
+    /// What `fluid_place_block` answers instead of the state it is offered, when set.
+    pub fluid_place_answer: Option<Option<BlockStateId>>,
     pub cake_asks: std::cell::Cell<u32>,
     pub tick_ready: bool,
     pub block_events_ready: bool,
@@ -128,6 +130,7 @@ impl TestLevel {
             wire_connect: HashMap::new(),
             connect: HashMap::new(),
             cake_answer: None,
+            fluid_place_answer: None,
             cake_asks: Default::default(),
             time: 0,
             day_time: 0,
@@ -168,6 +171,14 @@ impl TestLevel {
 }
 impl crate::level::BlockEntityNeighbors for TestLevel {}
 impl LevelAccess for TestLevel {
+    fn fluid_place_block(
+        &self,
+        _pos: BlockPos,
+        _liquid_pos: BlockPos,
+        state: BlockStateId,
+    ) -> Option<BlockStateId> {
+        self.fluid_place_answer.unwrap_or(Some(state))
+    }
     fn cake_can_eat(&self, vanilla: bool) -> bool {
         self.cake_asks.set(self.cake_asks.get() + 1);
         self.cake_answer.unwrap_or(vanilla)

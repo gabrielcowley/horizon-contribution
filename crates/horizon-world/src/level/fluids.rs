@@ -823,37 +823,29 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
 
     // ---- LiquidBlock ----
 
-    /// `LiquidBlock.shouldSpreadLiquid`, including lava's conversions.
+    /// `LiquidBlock.shouldSpreadLiquid`, with NeoForge's `FluidInteractionRegistry`: for each
+    /// neighbour in `POSSIBLE_FLOW_DIRECTIONS` order, the fluid's interactions in table order
+    /// (vanilla's lava rules first, then the mods'). The first that matches places its block
+    /// through `fluid_place_block`, fizzes and stops the spread.
     pub(crate) fn should_spread_liquid(&mut self, pos: BlockPos, state: BlockStateId) -> bool {
         let b = self.b;
-        if !b.is_lava_fluid(b.fluid(state).kind()) {
+        let kind = b.fluid(state).kind();
+        if !b.has_fluid_interactions(kind) {
             return true;
         }
-        let over_soul_soil = b.is_block(self.below_state(pos), b.named.soul_soil);
+        let source = self.fluid_at(pos).is_source();
         for direction in POSSIBLE_FLOW_DIRECTIONS {
-            let neighbour = rel(pos, direction.opposite());
-            if b.is_water_fluid(self.fluid_at(neighbour).kind()) {
-                let block = if self.fluid_at(pos).is_source() {
-                    b.named.obsidian
-                } else {
-                    b.named.cobblestone
-                };
-                if let Some(state) = self.level.fluid_place_block(pos, pos, b.default_of(block)) {
-                    self.set_block_and_update(pos, state);
-                }
-                self.level_event(1501, pos, 0);
-                return false;
+            let neighbour = self.state(rel(pos, direction.opposite()));
+            let Some((_, result)) =
+                b.fluid_interaction(kind, source, neighbour, || self.below_state(pos))
+            else {
+                continue;
+            };
+            if let Some(state) = self.level.fluid_place_block(pos, pos, result) {
+                self.set_block_and_update(pos, state);
             }
-            if over_soul_soil && b.is_block(self.state(neighbour), b.named.blue_ice) {
-                if let Some(state) =
-                    self.level
-                        .fluid_place_block(pos, pos, b.default_of(b.named.basalt))
-                {
-                    self.set_block_and_update(pos, state);
-                }
-                self.level_event(1501, pos, 0);
-                return false;
-            }
+            self.level_event(1501, pos, 0);
+            return false;
         }
         true
     }
@@ -998,6 +990,13 @@ pub(crate) fn merged_face_occludes(
         .join_is_not_empty(&union, ShapeOp::ONLY_FIRST)
         .unwrap_or(true)
 }
+
+#[cfg(test)]
+#[path = "fluid_interaction_fixture.rs"]
+mod fixture;
+#[cfg(test)]
+#[path = "fluid_interaction_tests.rs"]
+mod interaction_tests;
 
 #[cfg(test)]
 mod tests {

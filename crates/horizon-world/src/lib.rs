@@ -60,6 +60,7 @@ pub mod fluid;
 pub mod fluid_box;
 pub mod fluid_definitions;
 pub mod fluid_flow;
+pub mod fluid_interactions;
 pub mod fluid_occupancy;
 pub mod fluid_shape;
 pub mod food;

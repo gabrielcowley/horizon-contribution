@@ -747,6 +747,8 @@ impl Snapshot {
             }
         }
         let potted_by_content = super::potted_by_content(&blocks, &table);
+        let fluid_interactions =
+            crate::fluid_interactions::FluidInteractions::vanilla(&named, &table);
         Ok(Behaviours {
             table,
             props,
@@ -766,6 +768,7 @@ impl Snapshot {
             occlusion_cache: Default::default(),
             growth: Default::default(),
             block_maps: Default::default(),
+            fluid_interactions,
         })
     }
 }

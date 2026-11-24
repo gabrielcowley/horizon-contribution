@@ -1119,6 +1119,7 @@ fn build_with_gameplay<G: GameplayStateSource>(
             }
         }
     }
+    let fluid_interactions = crate::fluid_interactions::FluidInteractions::vanilla(&named, &table);
     Ok(Behaviours {
         table,
         props,
@@ -1138,6 +1139,7 @@ fn build_with_gameplay<G: GameplayStateSource>(
         occlusion_cache: Default::default(),
         growth: Default::default(),
         block_maps: Default::default(),
+        fluid_interactions,
     })
 }
 

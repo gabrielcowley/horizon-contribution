@@ -1394,6 +1394,9 @@ pub struct Behaviours {
     growth: growth::Growth,
     /// The open world's NeoForge block data maps.
     block_maps: block_maps::Slot,
+    /// What each fluid turns into beside another fluid or a block: vanilla's lava rules, then
+    /// the mods' ([`Self::resolve_fluid_interactions`]).
+    pub(crate) fluid_interactions: crate::fluid_interactions::FluidInteractions,
 }
 
 impl Behaviours {
