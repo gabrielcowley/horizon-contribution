@@ -1604,9 +1604,15 @@ impl Game<'_> {
                                             break;
                                         }
                                     }
-                                    // getCorrectStateForFluidBlock: the fluid unless sturdy on top.
+                                    // getCorrectStateForFluidBlock: the fluid's own block unless
+                                    // sturdy on top. A mod fluid is only ever in its own block,
+                                    // which keeps the colour it declared (`map_color`).
                                     if f.sturdy_full >> 1 & 1 == 0 {
-                                        color = if f.fluid == Fluid::Lava { 4 } else { 12 };
+                                        color = match f.fluid {
+                                            Fluid::Lava => 4,
+                                            Fluid::Modded => color,
+                                            _ => 12,
+                                        };
                                     }
                                 }
                             }
@@ -1942,6 +1948,8 @@ impl Game<'_> {
     }
 }
 
+#[cfg(test)]
+mod fluid_colour_tests;
 #[cfg(test)]
 mod live_frame_tests;
 #[cfg(test)]

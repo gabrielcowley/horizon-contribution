@@ -1,0 +1,2 @@
+horizon-client game::fluid_immersion_player_tests::a_swimmable_mod_fluid_moves_the_player_as_water_does lib daily resources
+horizon-client game::maps::fluid_colour_tests::a_mod_fluid_draws_its_declared_map_colour lib daily resources

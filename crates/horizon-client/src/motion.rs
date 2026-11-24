@@ -1159,8 +1159,9 @@ impl MotionWorld<'_, '_, '_> {
                 self.player.glider_wear += 1;
             }
         }
-        // LocalPlayer.goDownInWater, before LivingEntity.aiStep's velocity cleanup.
-        if self.player.fluids.was_touching_water
+        // LocalPlayer.goDownInWater, before LivingEntity.aiStep's velocity cleanup: also in a
+        // mod fluid that `can_swim`, as NeoForge sinks the player in any swimmable fluid type.
+        if (self.player.fluids.was_touching_water || self.player.swim_immersion().is_some())
             && self.player.shift_key_down
             && !self.player.flying
         {
@@ -1716,8 +1717,11 @@ impl MotionWorld<'_, '_, '_> {
             }
         }
         let flying_y = self.player.flying.then_some(self.player.velocity.y);
+        // A mod fluid that `can_swim` moves the player as water does, as it moves a mob.
         if !self.player.flying
-            && (self.player.fluids.was_touching_water || self.player.is_in_lava())
+            && (self.player.fluids.was_touching_water
+                || self.player.is_in_lava()
+                || self.player.swim_immersion().is_some())
         {
             horizon_world::living_fluid::travel_in_fluid(self, &mut gate, input)?;
         } else if self.player.fall_flying {
