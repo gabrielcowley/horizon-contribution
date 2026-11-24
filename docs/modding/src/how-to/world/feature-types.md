@@ -17,14 +17,17 @@ name stops startup with a message naming your mod. Vanilla's types keep their ID
 ## Decoding
 
 `FeatureType::decode(&self, config: &Tag, decode: &mut dyn FeatureDecode)` is the type's codec. In
-26.3 a configured feature holds its settings inline, beside `type`:
+26.3 a configured feature (`data/mymod/worldgen/feature/vein.json`) holds its settings inline,
+beside `type`:
 
 ```json
 { "type": "mymod:vein", "size": 32, "targets": [ ... ] }
 ```
 
 `config` is that object without `type`, converted to NBT once, when the data pack loads and again
-on `/reload`. Return an `Arc<dyn ConfiguredFeature>`. An `Err(FeatureError(..))` refuses the
+on `/reload`. A JSON number arrives in the narrowest tag that holds it, as vanilla's `JsonOps` to
+`NbtOps` conversion gives it: `"size": 32` is a `Tag::Byte`, `"size": 200` a `Tag::Short`. Accept
+every width. Return an `Arc<dyn ConfiguredFeature>`. An `Err(FeatureError(..))` refuses the
 feature at load, naming the type and your message, as a malformed built-in feature is refused:
 nothing fails later, when a chunk first reaches it.
 

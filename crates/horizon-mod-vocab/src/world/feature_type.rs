@@ -77,10 +77,11 @@ pub fn target_block_state(target: RuleTestHandle, state: BlockState) -> TargetBl
 pub trait FeatureType: Send + Sync + 'static {
     /// The codec: the configured feature `config` describes (26.3's inline shape, its settings
     /// beside `type`, converted to NBT once, without `type`), decoded once when the data pack
-    /// loads and again on `/reload`. Decode the vanilla values it embeds with `decode`'s
-    /// decoders. An `Err` refuses the feature at load, naming the type and the message, as a
-    /// data pack's malformed built-in feature is refused; nothing fails later, when a chunk
-    /// first reaches it.
+    /// loads and again on `/reload`. A JSON number arrives in the narrowest tag that holds it
+    /// (`32` as a `Tag::Byte`), as vanilla's `JsonOps` to `NbtOps` gives it. Decode the vanilla
+    /// values it embeds with `decode`'s decoders. An `Err` refuses the feature at load, naming
+    /// the type and the message, as a data pack's malformed built-in feature is refused; nothing
+    /// fails later, when a chunk first reaches it.
     fn decode(
         &self,
         config: &Tag,
