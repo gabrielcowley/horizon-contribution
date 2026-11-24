@@ -42,3 +42,7 @@ impl WorldFluid {
         Ok(())
     }
 }
+
+/// What a fluid becomes beside another fluid or a block: declared beside the fluids.
+#[path = "fluid_interaction.rs"]
+pub(crate) mod fluid_interaction;
