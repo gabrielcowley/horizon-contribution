@@ -163,10 +163,7 @@ mod tests {
         assert_eq!(none.check(), Err("when: names no condition".into()));
         let mut missing = ok.clone();
         missing.becomes.flowing.clear();
-        assert_eq!(
-            missing.check(),
-            Err("becomes.flowing: is missing".into())
-        );
+        assert_eq!(missing.check(), Err("becomes.flowing: is missing".into()));
         let bare = FluidInteraction::touching_block("lava", "minecraft:stone", "a:b", "a:b");
         assert_eq!(
             bare.check(),
