@@ -458,7 +458,7 @@ impl FallDamageWorld for MotionWorld<'_, '_, '_> {
 }
 impl LivingLandingWorld for MotionWorld<'_, '_, '_> {
     fn update_fluid_interaction(&mut self) -> Result<bool> {
-        self.update_fluids()
+        self.refresh_fluids()
     }
     fn is_server_level(&self) -> bool {
         true

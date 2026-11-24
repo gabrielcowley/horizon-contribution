@@ -890,22 +890,31 @@ impl PlayerMotion {
         self.run_sprint_tick(keys, conditions, sprint_window)
     }
     fn sprint_conditions(&self) -> crate::sprint::Conditions {
+        // NeoForge's LocalPlayer.aiStep: a fluid it `can_swim` in sprints as water does, and eyes
+        // in one (`canStartSwimming`) as under water.
+        let swims = self.swim_immersion().is_some();
+        let eyes_swim = self
+            .fluids
+            .interaction
+            .eye_immersion()
+            .is_some_and(|rules| rules.can_swim);
         crate::sprint::Conditions {
             sprinting: self.sprinting,
             mobility_restricted: self.mobility_restricted,
             enough_food: self.health.food.has_enough_food(),
             may_fly: self.may_fly,
             flying: self.flying,
-            // Entity.isInShallowWater.
-            shallow_water: self.fluids.was_touching_water && !self.is_under_water(),
+            // Entity.isInShallowWater, and a swimmable mod fluid the eyes are out of.
+            shallow_water: self.fluids.was_touching_water && !self.is_under_water()
+                || swims && !eyes_swim,
             fall_flying: self.fall_flying,
             on_ground: self.ground.on_ground,
             horizontal_collision: self.collision.horizontal,
             minor_horizontal_collision: self.collision.minor,
             slow_item: self.item_use_slows_sprint,
             moving_slowly: self.moving_slowly(),
-            in_water: self.fluids.was_touching_water,
-            under_water: self.is_under_water(),
+            in_water: self.fluids.was_touching_water || swims,
+            under_water: self.is_under_water() || eyes_swim,
             swimming: self.swimming,
             ..Default::default()
         }

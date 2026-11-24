@@ -1022,7 +1022,7 @@ impl Mob {
         events: &mut Vec<MobEvent>,
     ) {
         if !self.fluids.in_water {
-            self.update_fluids(w, events);
+            self.refresh_fluids(w, events);
         }
         // Strider.checkFallDamage: in lava the fall is reset and the base never
         // runs, so a strider that drops into a lava sea lands with no damage and
@@ -1083,9 +1083,17 @@ impl Mob {
         let lo = Vec3::new(lo.x, lo.y.max(boat.max_y - 0.001), lo.z);
         w.fluids_from(Aabb::new(lo, hi), b.min_position().y, self.eye_y())
     }
+    /// The base tick's fluid update: [`Self::refresh_fluids`], then a mod fluid with entity rules
+    /// scales the fall, once a tick.
+    pub(super) fn update_fluids(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
+        self.refresh_fluids(w, events);
+        if let Some(immersion) = self.fluids.immersion {
+            self.fall_distance *= f64::from(immersion.rules.fall_distance_modifier);
+        }
+    }
     /// Entity.updateFluidInteraction: the fluid state, then touching water
     /// resets the fall and entering it (after the first tick) splashes.
-    pub(super) fn update_fluids(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
+    fn refresh_fluids(&mut self, w: &MobWorld, events: &mut Vec<MobEvent>) {
         let was_touching_water = self.fluids.in_water;
         let boat = self
             .fluids
@@ -1097,14 +1105,11 @@ impl Mob {
         if (self.fluids.in_water || self.fluids.in_lava) && self.pushed_by_fluid() {
             self.velocity = w.pushed_by_currents(self.bounds(), self.velocity);
         }
-        // A mod fluid with entity rules pushes at its `motion_scale` and scales the fall.
-        if let Some(immersion) = self.fluids.immersion {
-            if self.pushed_by_fluid() {
-                for (scale, current) in w.mod_currents(self.bounds()) {
-                    let _ = current.apply_to(&mut Pushed(&mut self.velocity), scale);
-                }
+        // A mod fluid with entity rules pushes at its `motion_scale`.
+        if self.fluids.immersion.is_some() && self.pushed_by_fluid() {
+            for (scale, current) in w.mod_currents(self.bounds()) {
+                let _ = current.apply_to(&mut Pushed(&mut self.velocity), scale);
             }
-            self.fall_distance *= f64::from(immersion.rules.fall_distance_modifier);
         }
         if self.fluids.in_water {
             self.fall_distance = 0.0;

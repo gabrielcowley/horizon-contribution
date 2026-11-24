@@ -721,6 +721,17 @@ mod tests {
             pool.velocity.x
         );
         assert_eq!(pool.fall_distance, 2.0);
+        // `checkFallDamage`'s refresh pushes again and leaves the fall distance.
+        crate::entity_fluid_tick::refresh(
+            &mut interaction,
+            &mut pool,
+            FluidTagId(0),
+            FluidTagId(1),
+            1000,
+        )
+        .unwrap();
+        assert!((pool.velocity.x - 0.014).abs() < 1e-12);
+        assert_eq!(pool.fall_distance, 2.0);
 
         let inert = register("immersion_test:paint", None);
         let mut pool = Pool {

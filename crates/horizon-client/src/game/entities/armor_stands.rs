@@ -1099,11 +1099,18 @@ impl Game<'_> {
                 self.dim.id(),
                 &mut a.equipment,
             );
-            let (water_height, lava_height) =
-                a.push_by_fluid(&self.world, &self.res.motion().fluids, &self.loop_context);
+            let (water_height, lava_height, swim_height) = a.push_by_fluid_and_swim(
+                &self.world,
+                &self.res.motion().fluids,
+                &self.loop_context,
+            );
             let in_water = water_height > 0.0;
-            let medium =
-                horizon_client::entities::StandMedium::from_heights(water_height, lava_height);
+            // A mod fluid it can swim in moves the stand as water does (NeoForge's
+            // `LivingEntity.travel`); `in_water` stays water's alone.
+            let medium = horizon_client::entities::StandMedium::from_heights(
+                water_height.max(swim_height),
+                lava_height,
+            );
             // Entity.collide asks for the entities meeting the box stretched
             // by this tick's movement (the fluid push is already in it).
             nearby.clear();

@@ -398,6 +398,13 @@ impl MotionWorld<'_, '_, '_> {
         self.player.fluids.interaction = interaction;
         result.map_err(|e| e.to_string().into())
     }
+    /// `LivingEntity.checkFallDamage`'s refresh: the same, without scaling the fall distance.
+    pub fn refresh_fluids(&mut self) -> Result<bool> {
+        let mut interaction = std::mem::take(&mut self.player.fluids.interaction);
+        let result = entity_fluid_tick::refresh(&mut interaction, self, WATER, LAVA, 1_000_000);
+        self.player.fluids.interaction = interaction;
+        result.map_err(|e| e.to_string().into())
+    }
     /// `ClipContext.Fluid.WATER` in a fall-reset ray: the water's shape.
     pub(super) fn water_clip(&mut self, from: Vec3, to: Vec3, p: BlockPos) -> Result<bool> {
         let fluid = self.fluid_at(p);

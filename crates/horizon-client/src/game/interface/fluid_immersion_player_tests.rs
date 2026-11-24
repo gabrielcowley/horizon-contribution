@@ -15,6 +15,7 @@ impl Hooks for Pools {
         immersion.can_swim = true;
         immersion.can_push_entity = true;
         immersion.motion_scale = 0.007;
+        immersion.fall_distance_modifier = 0.25;
         let mut syrup = WorldFluid::default();
         syrup.immersion = Some(immersion);
         r.declare_world_fluid("syrup", syrup);
@@ -104,5 +105,82 @@ fn a_swimmable_mod_fluid_moves_the_player_as_water_does() {
         assert!(water > f64::from(floor_y) + 3.0, "water {water}");
         // Ten ticks of free fall from rest drop 3.35 blocks; ten in water, about 0.2.
         assert!(paint < water - 3.0, "paint {paint}, water {water}");
+        // Sprinting forward under the surface starts a swim and keeps it, tick for tick as in
+        // water; in paint there is none.
+        let mut swim = |x0: i32| {
+            let start = Vec3::new(f64::from(x0) + 1.5, f64::from(floor_y) + 1.5, 2.5);
+            let mut player = PlayerMotion::new(game.motion, start).unwrap();
+            let mut world =
+                std::mem::replace(&mut game.world, horizon_client::world::World::new(stone, 0));
+            let mut ticks = Vec::new();
+            {
+                let mut w = MotionWorld {
+                    entities: &[],
+                    player: &mut player,
+                    scene: &mut world,
+                    assets: &game.pack.assets,
+                    collision_binding: game.collision,
+                    resources: game.motion,
+                    health: &game.health_resources,
+                    loop_context: &game.loop_context,
+                    damage_hooks: &game.damage_hooks,
+                    tag_items: None,
+                    block_registries: None,
+                };
+                for _ in 0..8 {
+                    let keys = horizon_client::sprint::Keys {
+                        forward: true,
+                        sprint: true,
+                        ..Default::default()
+                    };
+                    w.controlled_simulation_tick(keys).unwrap();
+                    ticks.push((w.player.sprinting, w.player.swimming));
+                }
+            }
+            game.world = world;
+            ticks
+        };
+        let (syrup, paint, water) = (swim(2), swim(10), swim(18));
+        assert_eq!(water.last(), Some(&(true, true)), "water {water:?}");
+        // NeoForge's `canStartSwimming` reads this tick's eyes where `isUnderWater` reads the last
+        // tick's, so the swim starts one tick before water's.
+        assert_eq!(syrup[0], (true, false), "syrup {syrup:?}");
+        assert!(
+            syrup[1..].iter().all(|tick| *tick == (true, true)),
+            "syrup {syrup:?}"
+        );
+        assert!(paint.iter().all(|tick| !tick.1), "paint {paint:?}");
+        // Each tick in syrup scales the fall once, at its start, then adds the tick's own drop.
+        let start = Vec3::new(3.5, f64::from(floor_y) + 4.5, 3.5);
+        let mut player = PlayerMotion::new(game.motion, start).unwrap();
+        player.fall_distance = 8.0;
+        let mut world =
+            std::mem::replace(&mut game.world, horizon_client::world::World::new(stone, 0));
+        {
+            let mut w = MotionWorld {
+                entities: &[],
+                player: &mut player,
+                scene: &mut world,
+                assets: &game.pack.assets,
+                collision_binding: game.collision,
+                resources: game.motion,
+                health: &game.health_resources,
+                loop_context: &game.loop_context,
+                damage_hooks: &game.damage_hooks,
+                tag_items: None,
+                block_registries: None,
+            };
+            for _ in 0..4 {
+                let (fall, y) = (w.player.fall_distance, w.player.position.y);
+                w.simulation_tick([0.0; 2], false).unwrap();
+                let expected = fall * 0.25 + (y - w.player.position.y);
+                assert!(
+                    (w.player.fall_distance - expected).abs() < 1e-6,
+                    "fall {}, expected {expected}",
+                    w.player.fall_distance
+                );
+            }
+        }
+        game.world = world;
     });
 }

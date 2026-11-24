@@ -25,7 +25,29 @@ pub trait EntityFluidTickWorld:
 }
 /// The push predicate is queried twice: before resetting immersion state and
 /// after water-entry effects. Water/lava membership is captured before effects.
+///
+/// The base tick's: also scales the fall distance by a mod fluid's modifier, as NeoForge's
+/// `updateInWaterStateAndDoFluidPushing` does. [`refresh`] is the same without it.
 pub fn update<W: EntityFluidTickWorld>(
+    interaction: &mut EntityFluidInteraction,
+    world: &mut W,
+    water: FluidTagId,
+    lava: FluidTagId,
+    budget: usize,
+) -> Result<bool, FluidInteractionError<WorldError<W>>> {
+    let changed = refresh(interaction, world, water, lava, budget)?;
+    // The deepest mod fluid that declared entity rules scales the fall.
+    if let Some(immersion) = interaction.immersion() {
+        world
+            .scale_fall_distance(immersion.rules.fall_distance_modifier)
+            .map_err(FluidInteractionError::World)?;
+    }
+    Ok(changed)
+}
+/// `LivingEntity.checkFallDamage`'s refresh of an entity out of water. Its currents push again
+/// (a living entity in a mod fluid is pushed twice a tick, as in the Original's oracle trace),
+/// and the fall distance is left alone.
+pub fn refresh<W: EntityFluidTickWorld>(
     interaction: &mut EntityFluidInteraction,
     world: &mut W,
     water: FluidTagId,
@@ -45,12 +67,6 @@ pub fn update<W: EntityFluidTickWorld>(
         if !world.was_touching_water() && !world.first_tick() {
             world.water_splash().map_err(FluidInteractionError::World)?;
         }
-    }
-    // NeoForge's fluid types: the deepest mod fluid that declared entity rules scales the fall.
-    if let Some(immersion) = interaction.immersion() {
-        world
-            .scale_fall_distance(immersion.rules.fall_distance_modifier)
-            .map_err(FluidInteractionError::World)?;
     }
     world.set_was_touching_water(in_water);
     if world
