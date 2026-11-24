@@ -154,6 +154,27 @@ pub struct FluidState {
 }
 
 impl FluidState {
+    /// `Fluid.getSource(false)`: `fluid`'s still source, amount 8, not falling.
+    pub fn source(fluid: FluidKey) -> Self {
+        Self {
+            fluid,
+            amount: 8,
+            falling: false,
+            source: true,
+        }
+    }
+    /// `FlowingFluid.getFlowing(amount, falling)`: `fluid` flowing with `amount`, 1 through 8,
+    /// as the key of its source form names it. A state for a mod to ask about, as
+    /// `LevelRef::fluid_interaction_at` is asked; `FluidStates::legacy_block` says whether a
+    /// block can hold it.
+    pub fn flowing(fluid: FluidKey, amount: u8, falling: bool) -> Self {
+        Self {
+            fluid,
+            amount,
+            falling,
+            source: false,
+        }
+    }
     /// Whether this is the empty fluid.
     pub fn is_empty(self) -> bool {
         self.amount == 0
