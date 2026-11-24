@@ -141,7 +141,7 @@ impl Behaviours {
     pub(crate) fn default_of(&self, block: BlockId) -> BlockStateId {
         self.table.default_state(block)
     }
-    pub(crate) fn air(&self) -> BlockStateId {
+    pub fn air(&self) -> BlockStateId {
         self.table.default_state(self.named.air)
     }
 }

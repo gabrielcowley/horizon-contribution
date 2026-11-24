@@ -152,6 +152,47 @@ pub fn register_world_fluids(
     Ok(names)
 }
 
+/// Records the fluid interactions the mods declare, for the block tables to resolve: each content
+/// mod's files and then what it declared in code, in mod order, then code declarations of mods
+/// with no content. `code` holds the code declarations by mod id, in registration order.
+pub fn register_fluid_interactions(
+    mods: &[ContentMod],
+    code: &[(String, horizon_mod_package::content::FluidInteraction)],
+) {
+    use horizon_world::fluid_interactions::DeclaredFluidInteraction;
+    let declared = |owner: &str, i: &horizon_mod_package::content::FluidInteraction| {
+        DeclaredFluidInteraction {
+            owner: owner.to_owned(),
+            fluid: i.fluid.clone(),
+            touching_fluid: i.when.touching_fluid.clone(),
+            touching_block: i.when.touching_block.clone(),
+            block_below: i.when.block_below.clone(),
+            source: i.becomes.source.clone(),
+            flowing: i.becomes.flowing.clone(),
+        }
+    };
+    let mut list = Vec::new();
+    for m in mods {
+        list.extend(
+            m.content
+                .fluid_interactions
+                .iter()
+                .map(|i| declared(&m.id, i)),
+        );
+        list.extend(
+            code.iter()
+                .filter(|(owner, _)| *owner == m.id)
+                .map(|(owner, i)| declared(owner, i)),
+        );
+    }
+    list.extend(
+        code.iter()
+            .filter(|(owner, _)| !mods.iter().any(|m| m.id == *owner))
+            .map(|(owner, i)| declared(owner, i)),
+    );
+    horizon_world::fluid_interactions::set_declared(list);
+}
+
 #[path = "mod_content_fluid_declarations.rs"]
 mod fluid_declarations;
 pub use fluid_declarations::accept_world_fluids;

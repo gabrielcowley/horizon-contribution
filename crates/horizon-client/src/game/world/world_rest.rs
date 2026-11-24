@@ -69,7 +69,21 @@ pub(super) fn load_world_rest(
     };
     let load_behaviours = || {
         startup::time("rest.behaviours", || {
-            Behaviours::load_with_gameplay(registry, root, behaviour_json, gameplay_projection)
+            let mut behaviours = Behaviours::load_with_gameplay(
+                registry,
+                root,
+                behaviour_json,
+                gameplay_projection,
+            )?;
+            // The mods' fluid interactions name their own blocks and fluids, so they resolve
+            // against this registry; one naming nothing is left out and logged.
+            for refused in behaviours.resolve_fluid_interactions(
+                registry,
+                &horizon_world::fluid_interactions::declared(),
+            ) {
+                log::error!("Horizon: {refused}");
+            }
+            Ok::<_, std::io::Error>(behaviours)
         })
     };
     let load_block_entity_render = || -> Result<_> {

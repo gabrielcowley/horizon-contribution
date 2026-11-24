@@ -1000,6 +1000,20 @@ pub(super) fn content_root(
         content_overlay(root, sources, &jar_store)?
     };
     let world_fluids = horizon_client::mod_content::register_world_fluids(&overlay.mods)?;
+    use super::api_values::TryIntoEngine;
+    let code_interactions: Vec<_> = mod_api::__private::declared_fluid_interactions()
+        .iter()
+        .map(|(owner, interaction)| {
+            (
+                owner.clone(),
+                interaction
+                    .clone()
+                    .try_into_engine(&())
+                    .expect("a fluid interaction always converts"),
+            )
+        })
+        .collect();
+    horizon_client::mod_content::register_fluid_interactions(&overlay.mods, &code_interactions);
     register_block_entity_types(overlay.root.prepared(), &overlay.mods)?;
     if overlay.announce {
         horizon_protocol::mod_list::set_local(overlay.announced);

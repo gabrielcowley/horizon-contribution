@@ -566,6 +566,53 @@ impl WorldFluid {
     }
 }
 
+/// What a fluid becomes beside another fluid or a block (`data/<id>/horizon/fluid_interaction/`,
+/// a list per file), as `Registrar::declare_fluid_interaction` declares one in code: NeoForge's
+/// `FluidInteractionRegistry`. Files are read in path order, each list in its order.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[wire(crate = ::mod_vocab::wire)]
+#[serde(deny_unknown_fields)]
+pub struct FluidInteraction {
+    /// The fluid that converts, `minecraft:lava` or a world fluid.
+    pub fluid: String,
+    /// What it must touch.
+    pub when: FluidInteractionWhen,
+    /// What it becomes.
+    pub becomes: FluidInteractionBecomes,
+}
+/// Exactly one of `touching_fluid` and `touching_block`, and optionally `block_below`.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[wire(crate = ::mod_vocab::wire)]
+#[serde(default, deny_unknown_fields)]
+pub struct FluidInteractionWhen {
+    pub touching_fluid: Option<String>,
+    pub touching_block: Option<String>,
+    pub block_below: Option<String>,
+}
+/// The block states placed for a converting source and a flowing one, as `/setblock` reads them.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[wire(crate = ::mod_vocab::wire)]
+#[serde(deny_unknown_fields)]
+pub struct FluidInteractionBecomes {
+    pub source: String,
+    pub flowing: String,
+}
+impl FluidInteraction {
+    /// The same refusals as the code declaration's (`mod_api::FluidInteraction::check`).
+    pub fn check(&self) -> Result<(), String> {
+        let mut code = mod_vocab::FluidInteraction::touching_fluid(
+            &self.fluid,
+            "",
+            &self.becomes.source,
+            &self.becomes.flowing,
+        );
+        code.when.touching_fluid = self.when.touching_fluid.clone();
+        code.when.touching_block = self.when.touching_block.clone();
+        code.when.block_below = self.when.block_below.clone();
+        code.check()
+    }
+}
+
 /// How a fluid the mod names looks on the client (`data/<id>/horizon/fluid/`), as
 /// NeoForge's `IClientFluidTypeExtensions`: `getStillTexture` and `getTintColor`.
 /// The fluid needs no block, so it can be a fluid only a tank holds.
@@ -867,6 +914,8 @@ pub struct Content {
     pub creative_tabs: Vec<CreativeTab>,
     /// How its fluids look, by id.
     pub fluids: Vec<FluidLook>,
+    /// Its fluid interactions, in file path order and then each file's order.
+    pub fluid_interactions: Vec<FluidInteraction>,
     pub entity_types: Vec<EntityType>,
     /// Block entity types declared by native code, not content files.
     pub block_entity_types: Vec<BlockEntityType>,
@@ -998,6 +1047,7 @@ impl Content {
             effects: Vec::new(),
             creative_tabs: Vec::new(),
             fluids: Vec::new(),
+            fluid_interactions: Vec::new(),
             entity_types: Vec::new(),
             block_entity_types: Vec::new(),
             menu_types: Vec::new(),
@@ -1018,6 +1068,7 @@ impl Content {
             effects: Vec::new(),
             creative_tabs: Vec::new(),
             fluids: Vec::new(),
+            fluid_interactions: Vec::new(),
             entity_types: Vec::new(),
             block_entity_types: Vec::new(),
             menu_types: Vec::new(),
@@ -1158,6 +1209,7 @@ impl Content {
         let mut effects = Vec::new();
         let mut tabs = Vec::new();
         let mut fluids = Vec::new();
+        let mut interactions = Vec::new();
         let mut types = Vec::new();
         let mut menus = Vec::new();
         for name in &self.files {
@@ -1198,13 +1250,15 @@ impl Content {
                 tabs.push((tab, name.clone()));
             } else if let Some(fluid) = parse("fluid") {
                 fluids.push((fluid, name.clone()));
+            } else if parse("fluid_interaction").is_some() {
+                interactions.push(name.clone());
             } else if let Some(kind) = parse("entity_type") {
                 types.push((kind, name.clone()));
             } else if let Some(menu) = parse("menu") {
                 menus.push((menu, name.clone()));
             } else {
                 return Err(format!(
-                    "{name}: data/{id}/horizon/ holds block/, item/, mob_effect/, creative_tab/, fluid/, entity_type/ and menu/*.json only"
+                    "{name}: data/{id}/horizon/ holds block/, item/, mob_effect/, creative_tab/, fluid/, fluid_interaction/, entity_type/ and menu/*.json only"
                 ));
             }
         }
@@ -1363,6 +1417,16 @@ impl Content {
                 self.items.push(item);
             }
             self.fluids.push(look);
+        }
+        for name in interactions {
+            let file: Vec<FluidInteraction> =
+                serde_json::from_slice(&reader.read(&name)?).map_err(|e| format!("{name}: {e}"))?;
+            for (at, interaction) in file.into_iter().enumerate() {
+                interaction
+                    .check()
+                    .map_err(|e| format!("{name}: interaction {at}: {e}"))?;
+                self.fluid_interactions.push(interaction);
+            }
         }
         for (kind, name) in types {
             let file: EntityType =
@@ -3358,6 +3422,39 @@ capabilities = ["registries"]
             let e = hmod("fluid", MANIFEST_TEXT, bad).unwrap_err();
             assert!(e.contains("sprite"), "{e}");
         }
+    }
+
+    #[test]
+    fn fluid_interaction_files_load_in_path_order_and_refuse_a_bad_shape() {
+        let files: &[(&str, &[u8])] = &[
+            (
+                "data/ruby/horizon/fluid_interaction/b.json",
+                br#"[{"fluid":"minecraft:lava","when":{"touching_block":"minecraft:blue_ice","block_below":"ruby:ash"},"becomes":{"source":"ruby:ash","flowing":"ruby:ash[lit=false]"}}]"#,
+            ),
+            (
+                "data/ruby/horizon/fluid_interaction/a.json",
+                br#"[{"fluid":"minecraft:lava","when":{"touching_fluid":"ruby:oil"},"becomes":{"source":"minecraft:obsidian","flowing":"ruby:tar"}}]"#,
+            ),
+        ];
+        let content = hmod("interactions", MANIFEST_TEXT, files).unwrap();
+        let read: Vec<_> = content
+            .fluid_interactions
+            .iter()
+            .map(|i| (i.when.touching_fluid.as_deref(), i.becomes.flowing.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (Some("ruby:oil"), "ruby:tar"),
+                (None, "ruby:ash[lit=false]")
+            ]
+        );
+        let bad: &[(&str, &[u8])] = &[(
+            "data/ruby/horizon/fluid_interaction/x.json",
+            br#"[{"fluid":"minecraft:lava","when":{},"becomes":{"source":"a:b","flowing":"a:b"}}]"#,
+        )];
+        let e = hmod("interactions", MANIFEST_TEXT, bad).unwrap_err();
+        assert!(e.contains("interaction 0: when: names no condition"), "{e}");
     }
 
     #[test]

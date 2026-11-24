@@ -647,6 +647,18 @@ impl FluidsRegistrar for PartRegistrar {
         key
     }
 
+    fn declare_fluid_interaction(&mut self, interaction: crate::FluidInteraction) {
+        if let Err(error) = interaction.check() {
+            self.refused.push(format!(
+                "mod {}: fluid interaction of {:?}: {error}",
+                self.mod_id, interaction.fluid
+            ));
+            return;
+        }
+        self.fluid_interactions
+            .push((self.mod_id.to_owned(), interaction));
+    }
+
     fn attach_fluid_part(&mut self, fluid: &str, kind: &'static str, part: Arc<dyn FluidPart>) {
         self.attach(|p| &mut p.fluids, kind, fluid, part);
     }

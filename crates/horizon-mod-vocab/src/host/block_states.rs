@@ -201,6 +201,15 @@ pub trait BlockStatesBackend {
         fluid: FluidKey,
         constraints: &[StateConstraint],
     ) -> Result<(), FluidStateError>;
+    /// Side: server.
+    /// NeoForge's `FluidInteractionRegistry` list for `fluid`, in the order
+    /// `LiquidBlock.shouldSpreadLiquid` tries it: vanilla's lava rules first (touching
+    /// `#minecraft:water`, the live tag, then blue ice over soul soil), then the mods' in load and
+    /// declaration order, each with its ids as the registry names them and `fluid` its source
+    /// form. Either form of a fluid answers its family's list. Empty for a fluid with none; None
+    /// for a key that names no fluid in the world, or before the world's block tables load.
+    #[access(WorldOnly)]
+    fn fluid_interactions(&self, fluid: FluidKey) -> Option<Vec<FluidInteraction>>;
     /// Side: both.
     /// `BlockState.getLightEmission()`: the light the state gives off, 0 to 15 (glowstone 15,
     /// a torch 14). A block declaring `dynamic_light` may emit another level at a position

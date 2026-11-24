@@ -57,4 +57,5 @@ pub(crate) mod tags;
 pub(crate) mod terrain_view;
 pub(crate) mod ticket_controller;
 pub(crate) mod types;
+pub(crate) mod fluid_interaction;
 pub(crate) mod world_fluid;

@@ -227,6 +227,25 @@ pub fn validate_decoded_effects(
     Ok(())
 }
 
+impl TryIntoEngine<()> for mod_api::FluidInteraction {
+    type Engine = engine::FluidInteraction;
+    type Error = std::convert::Infallible;
+    fn try_into_engine(&self, _: &()) -> Result<Self::Engine, Self::Error> {
+        Ok(engine::FluidInteraction {
+            fluid: self.fluid.clone(),
+            when: engine::FluidInteractionWhen {
+                touching_fluid: self.when.touching_fluid.clone(),
+                touching_block: self.when.touching_block.clone(),
+                block_below: self.when.block_below.clone(),
+            },
+            becomes: engine::FluidInteractionBecomes {
+                source: self.becomes.source.clone(),
+                flowing: self.becomes.flowing.clone(),
+            },
+        })
+    }
+}
+
 impl TryIntoEngine<()> for (String, mod_api::WorldFluid) {
     type Engine = engine::FluidLook;
     type Error = std::convert::Infallible;

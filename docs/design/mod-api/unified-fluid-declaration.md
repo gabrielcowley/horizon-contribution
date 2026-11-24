@@ -63,6 +63,15 @@ Water template defaults to tick delay 5, drop-off 1, slope 4 and light 0;
 lava light defaults 15. Resolve remaining lava rules from the existing vanilla
 context rather than flattening them into water defaults.
 
+Fluid interactions (what a fluid becomes beside another fluid or a block, NeoForge's
+`FluidInteractionRegistry`) are a sibling declaration list of `Fluid`, not a field of one: a rule usually
+belongs to another mod's fluid (vanilla lava) and only names your own in its condition. Each names the
+converting fluid, exactly one of `touching_fluid` and `touching_block` with an optional `block_below`, and a
+`source` and a `flowing` result. They resolve into one ordered table per fluid family: vanilla's two lava
+rules first (touching `#minecraft:water`, read live, then blue ice over soul soil), then mod load order and
+declaration order. `LiquidBlock.shouldSpreadLiquid` reads it; `FluidStates::interactions` and
+`LevelRef::fluid_interaction_at` read it back for mods without writing.
+
 Registration returns named `FluidDeclarationError` reasons: `InvalidId`,
 `DuplicateOwner`, `NameCollision`, `InvalidRange`, `IncoherentPlacement`,
 `UnsupportedCapability` and `Capacity`. Include owner, id and field in diagnostics.
@@ -142,7 +151,7 @@ and rollback semantics, rebasing against whichever version lands first.
 | World lava, fast context | Proposed template defaults: delay 10, drop-off 1, slope 4, light 15 |
 | Source conversion | Default false: two adjacent sources do not create a source; explicit true with the required support creates this mod identity, never vanilla water |
 | Replacement | Preserve current mod-fluid refusal to be replaced; empty accepts flow; vanilla water accepts a different fluid only downward |
-| Mixing | A lava-template mod keeps its own identity and does not acquire vanilla lava mixing solely from its template; vanilla water/lava mixing remains unchanged |
+| Mixing | A lava-template mod keeps its own identity and does not acquire vanilla lava mixing solely from its template, and gains exactly the fluid interactions declared for it; vanilla water/lava mixing remains unchanged, as the first entries of lava's interaction table |
 | Tag membership | A declared member matches its tag for source and flowing states; a nonmember does not; membership never truncates at 128 identities |
 | Generated bucket | Placement creates the declared source block; pickup returns the declared bucket and removes that source; tank mode generates neither route |
 | Client appearance | Shared sprite/tint supplies the default model; an explicit model override decorates the same identity without registering another fluid |

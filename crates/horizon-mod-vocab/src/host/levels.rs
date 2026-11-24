@@ -329,6 +329,23 @@ pub trait LevelsBackend {
     #[access(WorldOnly)]
     fn level_block_state(&self, level: LevelRef, pos: [i32; 3]) -> Option<BlockState>;
     /// Side: server.
+    /// The block the first of `fluid`'s fluid interactions (`host.fluid_interactions`) that
+    /// matches would place at `pos`, judged against the block at `neighbour` and the one under
+    /// `pos`, as `LiquidBlock.shouldSpreadLiquid` judges each neighbour: what NeoForge's
+    /// `FluidInteractionRegistry.InteractionInformation` would do for a fluid in that state.
+    /// `fluid` need not be at `pos`. Reads the level and writes nothing: no `fluid_place_block`,
+    /// no level event, so the answer is the declared block before any listener changes it. None
+    /// when nothing matches, for a fluid with no world form, an unloaded position or a stale
+    /// handle.
+    #[access(WorldOnly)]
+    fn level_fluid_interaction_at(
+        &self,
+        level: LevelRef,
+        fluid: FluidState,
+        pos: [i32; 3],
+        neighbour: [i32; 3],
+    ) -> Option<BlockState>;
+    /// Side: server.
     /// Preview a held tool's transformation without changing the block or stack. The existing
     /// block-tool hook fires with `simulated` true; listeners must not mutate the level in a
     /// simulation. The player must be live in the level in place, and the block must be loaded;

@@ -4,6 +4,12 @@ pub fn declared_world_fluids() -> &'static [(String, crate::WorldFluid)] {
     installed().map_or(&[], |installed| &installed.world_fluids)
 }
 
+/// The fluid interactions the mods declared in code, by mod id, in mod order and then
+/// declaration order, once they have all registered.
+pub fn declared_fluid_interactions() -> &'static [(String, crate::FluidInteraction)] {
+    installed().map_or(&[], |installed| &installed.fluid_interactions)
+}
+
 impl HookParts {
     pub(crate) fn fluid<'k>(
         &self,
@@ -37,6 +43,12 @@ pub trait FluidsRegistrar {
     /// `RegisterEvent` for a `FluidType`), with its block and, as `fluid` says, its bucket. Its
     /// `data/<mod id>/horizon/fluid/<path>.json`, if any, says how it looks.
     fn declare_world_fluid(&mut self, path: &str, fluid: crate::WorldFluid) -> crate::FluidKey;
+
+    /// Declare what a fluid becomes when it touches another fluid or a block (NeoForge's
+    /// `FluidInteractionRegistry.addInteraction`), after vanilla's and any earlier mod's. A
+    /// malformed one refuses the mod's registration; one naming a fluid or block that doesn't
+    /// exist is refused, and logged, when the registry loads.
+    fn declare_fluid_interaction(&mut self, interaction: crate::FluidInteraction);
 
     /// Attach `part`, of kind `kind`, to the world fluid `fluid`.
     fn attach_fluid_part(&mut self, fluid: &str, kind: &'static str, part: Arc<dyn FluidPart>);

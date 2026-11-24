@@ -61,6 +61,7 @@ impl PartRegistrar {
             entity_attributes,
             general_entity_types,
             world_fluids,
+            fluid_interactions,
             entity_attribute_modifications,
             attributes,
             spawn_placements,

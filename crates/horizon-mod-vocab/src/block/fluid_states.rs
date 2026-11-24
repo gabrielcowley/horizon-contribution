@@ -108,6 +108,14 @@ impl FluidStates<'_> {
     pub fn type_properties(&self, fluid: FluidKey) -> Option<FluidTypeProperties> {
         self.backend?.fluid_type_properties(fluid)
     }
+    /// The fluid interactions `fluid` converts by (NeoForge's `FluidInteractionRegistry` list),
+    /// in the order they are tried: vanilla's lava rules first, then the mods'. Empty for a fluid
+    /// with none; none for a fluid with no world form, without a resolved registry, or before
+    /// the world's block tables load. Server-side; what one would place beside a given
+    /// neighbour is `LevelRef::fluid_interaction_at`.
+    pub fn interactions(&self, fluid: FluidKey) -> Option<Vec<crate::FluidInteraction>> {
+        self.backend?.fluid_interactions(fluid)
+    }
     /// `FluidState.createLegacyBlock`: the block state that holds `state` in the world, a water
     /// or lava block of the matching level, a mod's world fluid's block, or air for the empty
     /// fluid. None for a state no fluid can be in (a tank-only fluid, an amount above 8, a zero

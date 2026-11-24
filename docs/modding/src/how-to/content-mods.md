@@ -159,6 +159,25 @@ takes `tick_delay` (1 or more, default 5), `drop_off` (1 to 7, default 1), `slop
 swim in it or get pushed by it. In the world it draws its `sprite`, a block atlas texture such as `mymod:block/oil`, times
 its `tint`; with neither it looks like water, and a `tint` alone colours water's textures. A client mod's
 `register_fluid_models` hook collects `mod_api::FluidModel` values with separate flowing and overlay sprites.
+
+`fluid_interaction/` says what a fluid becomes when it touches another fluid or a block, as NeoForge's
+`FluidInteractionRegistry` does: lava beside honey turning to limestone. Each file is a list, read in path order:
+
+```json
+[{"fluid": "minecraft:lava", "when": {"touching_fluid": "mymod:honey"},
+  "becomes": {"source": "minecraft:obsidian", "flowing": "mymod:limestone"}}]
+```
+
+`fluid` is the fluid that converts: `minecraft:lava`, `minecraft:water` or a world fluid. `when` names exactly one of
+`touching_fluid` (a world fluid, source or flowing) and `touching_block`, and may add `block_below`, a block that must lie
+under the converting fluid, as vanilla's basalt needs soul soil. `becomes` gives the block state for a converting source
+and for a flowing one, as `/setblock` reads it. Each time the converting fluid is placed or a neighbour changes, the game
+tries its neighbours above and beside it (never below) in turn, and for each its interactions in order: vanilla's lava
+rules first, then every mod's in load order and file order. The first that matches places its block through
+`fluid_place_block`, fizzes (level event 1501) and stops the fluid spreading. Code declares the same with
+`Registrar::declare_fluid_interaction`, and a server reads the list back with `FluidStates::interactions` and what one
+neighbour would give with `LevelRef::fluid_interaction_at`. One naming a fluid or block that doesn't exist is left out and
+logged when the world loads.
 It is collected again before each resource bake, so a resource reload can change model identifiers as well as textures. Far terrain (LOD) omits mod fluids. LAN and dedicated server players play with them when they run the same mods: a client whose mods add different
 content is refused when it joins, with the reason.
 
