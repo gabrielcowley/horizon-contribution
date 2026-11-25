@@ -150,18 +150,11 @@ fn a_swimmable_mod_fluid_moves_the_player_as_water_does() {
         let ((syrup, syrup_slowed, syrup_far), (paint, ..), (water, _, water_far)) =
             (swim(2), swim(10), swim(18));
         assert!(!syrup_slowed, "a swim in syrup counts as a crawl");
-        // Its sprint starts a tick before water's (below), so it is never behind.
-        assert!(
-            syrup_far >= water_far && syrup_far < water_far * 1.5,
-            "syrup {syrup_far}, water {water_far}"
-        );
         assert_eq!(water.last(), Some(&(true, true)), "water {water:?}");
-        // NeoForge's `canStartSwimming` reads this tick's eyes where `isUnderWater` reads the last
-        // tick's, so the swim starts one tick before water's.
-        assert_eq!(syrup[0], (true, false), "syrup {syrup:?}");
+        assert_eq!(syrup, water, "a swim in syrup starts and holds as in water");
         assert!(
-            syrup[1..].iter().all(|tick| *tick == (true, true)),
-            "syrup {syrup:?}"
+            (syrup_far - water_far).abs() < 1e-9,
+            "syrup {syrup_far}, water {water_far}"
         );
         assert!(paint.iter().all(|tick| !tick.1), "paint {paint:?}");
         // Each tick in syrup scales the fall once, at its start, then adds the tick's own drop.
