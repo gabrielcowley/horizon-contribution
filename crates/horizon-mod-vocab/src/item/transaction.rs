@@ -142,10 +142,7 @@ pub trait HostTransaction: ServerHost {
     ///
     /// Covered: block entities (item slots, saved compound, custom name and attachments), cauldrons,
     /// players' inventories and cursors, entities' inventories
-    /// ([`ItemPlace::EntitySlot`](crate::ItemPlace::EntitySlot)), item entities' stacks, and the
-    /// blocks a mod sets, removes or changes a property of in the level in place. Such a block
-    /// write is stored in the transaction and set, with its flags and updates, at the outermost
-    /// commit: until then the old block's block entity stays, and the new block's isn't made.
+    /// ([`ItemPlace::EntitySlot`](crate::ItemPlace::EntitySlot)) and item entities' stacks.
     fn transaction<T, E>(
         &mut self,
         f: impl FnOnce(&mut Self, &Transaction) -> Result<T, E>,

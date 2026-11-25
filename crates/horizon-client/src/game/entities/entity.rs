@@ -193,6 +193,11 @@ pub(super) trait Entity: EntityRules {
     fn ticks_after_projectiles(&self) -> bool {
         false
     }
+    /// Whether one that joined since the last spawn packets ticks in the late
+    /// ordered pass, after them (primed TNT and falling blocks; orbs do not).
+    fn waits_for_spawn_packet(&self) -> bool {
+        false
+    }
     /// `Entity.push` with the explosion's knockback.
     fn push_from_explosion(&mut self, push: Vec3) {
         let v = self.velocity_mut();
@@ -418,7 +423,7 @@ impl RenderEntityBounds for ArmorStand {
         // 0.5 x 1.975 collision box (especially raised arms and head banners).
         // This axis-aligned envelope contains every vanilla pose while staying
         // independent of the stand's yaw and partial-tick rotation.
-        let scale = if self.small { 0.5 } else { 1.0 };
+        let scale = if self.small { 0.5 } else { 1.0 } * f64::from(self.scale);
         let equipped = self.equipment.iter().any(Option::is_some);
         let horizontal = if equipped { 2.0 } else { 1.5 * scale };
         let lower = if equipped { -1.0 } else { -0.5 * scale };
@@ -602,15 +607,28 @@ impl horizon_client::block_contact::InsideWalk for ItemInside<'_, '_> {
         precise: bool,
         effects: &mut mod_api::InsideEffects,
     ) -> std::result::Result<(), ()> {
-        let id = self.item.id;
+        let item = &*self.item;
         self.game.fire_batch_inside(
-            id as i32,
-            "minecraft:item",
-            state,
-            at,
+            horizon_client::block_contact::Contact {
+                entity: item.id as i32,
+                kind: "minecraft:item",
+                state,
+                position: at,
+            },
             precise,
             effects,
             Some(&mut *self.actions),
+            || {
+                mod_api::SweptEntity::new(
+                    item.position,
+                    item.previous,
+                    item.velocity,
+                    false,
+                    false,
+                    item.fall_distance,
+                    false,
+                )
+            },
         );
         Ok(())
     }
@@ -663,15 +681,28 @@ impl horizon_client::block_contact::InsideWalk for ProjectileInside<'_, '_> {
         precise: bool,
         effects: &mut mod_api::InsideEffects,
     ) -> std::result::Result<(), ()> {
-        let (id, kind) = (self.shot.id, self.shot.entity_type());
+        let shot = &*self.shot;
         self.game.fire_batch_inside(
-            id as i32,
-            kind,
-            state,
-            at,
+            horizon_client::block_contact::Contact {
+                entity: shot.id as i32,
+                kind: shot.entity_type(),
+                state,
+                position: at,
+            },
             precise,
             effects,
             Some(&mut *self.actions),
+            || {
+                mod_api::SweptEntity::new(
+                    shot.position,
+                    shot.previous,
+                    shot.velocity,
+                    false,
+                    false,
+                    shot.fall_distance,
+                    false,
+                )
+            },
         );
         Ok(())
     }
@@ -948,20 +979,18 @@ impl Game<'_> {
     /// discipline).
     pub(in crate::game) fn fire_batch_inside(
         &mut self,
-        entity: i32,
-        kind: &'static str,
-        state: horizon_world::registry::BlockStateId,
-        at: horizon_core::position::BlockPos,
+        contact: horizon_client::block_contact::Contact<'_>,
         precise: bool,
         effects: &mut mod_api::InsideEffects,
         actions: Option<&mut Vec<horizon_client::block_contact::QueuedAction>>,
+        swept: impl FnOnce() -> mod_api::SweptEntity,
     ) {
         let Some(dimension) = horizon_client::block_contact::current_level() else {
             return;
         };
         if !horizon_client::block_contact::HOOKS
             .get()
-            .is_some_and(|hooks| (hooks.inside_listens)(state))
+            .is_some_and(|hooks| (hooks.inside_listens)(contact.state))
         {
             return;
         }
@@ -981,11 +1010,9 @@ impl Game<'_> {
             (hooks.inside_fire)(
                 &mut level,
                 dimension,
-                entity,
-                kind,
-                state,
-                at,
+                contact,
                 precise,
+                &swept(),
                 &mut staged,
                 &mut writes,
                 &mut queued,
@@ -993,13 +1020,13 @@ impl Game<'_> {
         }
         lent.give_back(&mut self.world);
         effects.absorb_step(staged);
-        horizon_client::block_contact::inside_written(state, at, writes);
+        horizon_client::block_contact::inside_written(contact.state, contact.position, writes);
         if let Some(actions) = actions {
             horizon_client::block_contact::queue_actions(
                 actions,
                 mod_api::ContactMoment::Inside,
-                state,
-                at,
+                contact.state,
+                contact.position,
                 queued,
             );
         }
@@ -2371,6 +2398,9 @@ impl Entity for PrimedTnt {
     fn ticks_after_projectiles(&self) -> bool {
         true
     }
+    fn waits_for_spawn_packet(&self) -> bool {
+        true
+    }
     fn native_type(&self) -> Cow<'static, str> {
         "minecraft:tnt".into()
     }
@@ -2465,6 +2495,9 @@ impl Entity for FallingBlock {
     fn ticks_after_projectiles(&self) -> bool {
         true
     }
+    fn waits_for_spawn_packet(&self) -> bool {
+        true
+    }
     fn native_type(&self) -> Cow<'static, str> {
         "minecraft:falling_block".into()
     }
@@ -2507,6 +2540,7 @@ impl Entity for FallingBlock {
 
 impl Entity for Projectile {
     fn reset_fall_distance(&mut self) {
+        self.fall_distance = 0.0;
         if let Some(arrow) = self.arrow.as_deref_mut() {
             arrow.fall_distance = 0.0;
         }

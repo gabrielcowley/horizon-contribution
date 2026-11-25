@@ -287,7 +287,10 @@ impl Game<'_> {
                 if client {
                     call(self)
                 } else {
-                    mod_api::run_transaction(self, |game, _| call(game))
+                    mod_api::run_transaction(self, |game, _| {
+                        game.keep_mod_blocks();
+                        call(game)
+                    })
                 }
             });
             match outcome {

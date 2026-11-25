@@ -27,7 +27,10 @@
 //! An entity added inside one goes at an abort, one removed is only marked until the root
 //! commit, and mods hear of joins and leaves at the root commit (`transactions/entities.rs`).
 use super::{BlockEntity, BlockStateId, Game, machines::HopperState};
+use horizon_client::block_entity_anim::EndGateway;
+use horizon_client::fast_hash::FxHashMap;
 use horizon_client::{items::ItemStack, world::BlockEntityExtras};
+use horizon_client_render::block_entities::TickerRegistration;
 use horizon_mod_runtime::attachments::{Attachments, Holder};
 use mod_api::{Transaction, TransactionLifecycle, TransactionSeal};
 use std::collections::HashMap;
@@ -95,11 +98,18 @@ pub(super) struct Level {
     /// it, never a handler lent the `Transaction`.
     close_token: u64,
     dimension: Option<super::Dim>,
+    /// Whether a mod's block writes join this transaction (`keep_mod_blocks`): a contact
+    /// action's own, and any opened inside it.
+    keeps_mod_blocks: bool,
     /// Each block entity as it was before this transaction first wrote it.
     block_entities: HashMap<Pos, Kept>,
     /// The block entities this transaction removed (`journal_remove_block_entity`): an abort
     /// puts them back as `block_entities` keeps them.
     removed_block_entities: std::collections::HashSet<Pos>,
+    /// The positions where a block write this transaction doesn't keep put another block
+    /// (`LevelRef::set_block` stores at once): an abort leaves the block and a block entity that
+    /// write made there.
+    unjournaled_blocks: std::collections::HashSet<Pos>,
     /// Each item slot (block entity, slot) a slot-only write changed, as it was before this
     /// transaction first wrote it, for a block entity not kept whole in `block_entities`: a
     /// move through a container keeps the slot it touches, not the entity's whole saved data.
@@ -145,6 +155,9 @@ pub(super) struct Level {
     chunk_marks: HashMap<(i32, i32), horizon_client::world::ChunkMark>,
     /// What the root commit does, in order.
     after: Vec<After>,
+    /// What a shared (`&self`) host staged here: it joins `after` when this transaction
+    /// commits and is dropped when it aborts (`Level::settle_staged`).
+    staged: std::cell::RefCell<Vec<After>>,
     /// Internal decide/fire/apply state. No menu route uses this yet.
     actions: decision::Journal,
     action: Option<decision::ActiveAction>,
@@ -187,12 +200,21 @@ struct Kept {
     name: Option<horizon_core::nbt::Tag>,
     /// The container lock and loot table roll kept beside the model.
     extras: BlockEntityExtras,
+    /// An end gateway's beam age and teleport cooldown, kept beside the model
+    /// (`BeAnims::gateway_servers`).
+    gateway: Option<EndGateway>,
+    /// Its ticker as it stood, for an abort to put back.
+    ticker: TickerRegistration,
+    /// The block state at its position: an abort puts the block entity back only over the
+    /// same block.
+    block: BlockStateId,
 }
 
 impl Kept {
     fn capture(
         world: &horizon_client::world::World,
         hoppers: &HashMap<Pos, HopperState>,
+        gateways: &FxHashMap<[i32; 3], EndGateway>,
         pos: Pos,
     ) -> Self {
         Self {
@@ -202,6 +224,9 @@ impl Kept {
             hopper: hoppers.get(&pos).copied(),
             name: world.block_names.get(&pos).cloned(),
             extras: world.block_entity_extras(pos),
+            gateway: gateways.get(&[pos.0, pos.1, pos.2]).copied(),
+            ticker: world.block_entities.ticker_registration(&pos),
+            block: world.block(pos.0, pos.1, pos.2),
         }
     }
 }
@@ -279,7 +304,7 @@ pub(super) enum After {
     Drop([i32; 3], ItemStack),
     /// `Player.drop(stack, false)` by the player with this UUID: what no longer fits.
     PlayerDrop(u128, ItemStack),
-    GivePickup(u128),
+    GivePickup(u128, ItemStack),
     InventoryTrigger(u128),
     GiveRest(u128, ItemStack, Option<[i32; 4]>),
     PlayerEquip(u128, String, Option<ItemStack>),
@@ -332,6 +357,13 @@ fn frame_token() -> u64 {
 }
 
 impl Level {
+    /// Merges what shared hosts staged into `after` on a commit; an abort drops it with the rest.
+    fn settle_staged(&mut self, commit: bool) {
+        let staged = std::mem::take(self.staged.get_mut());
+        if commit {
+            self.after.extend(staged);
+        }
+    }
     /// Keeps chested mob `id`'s item list's length, `len`, before `entity_slots` grows it, if
     /// this transaction hasn't yet.
     pub(super) fn keep_mob_length(&mut self, id: u32, len: usize) {
@@ -363,10 +395,12 @@ impl Game<'_> {
             self.world.block_entities.defer_retirement();
         }
         let lifetimes = self.entity_journal_open();
+        let keeps_mod_blocks = self.keeps_mod_blocks();
         self.transactions.push(Level {
             token,
             close_token,
             dimension: Some(self.dim),
+            keeps_mod_blocks,
             lifetimes,
             ..Level::default()
         });
@@ -459,6 +493,7 @@ impl Game<'_> {
     /// What closing `level` does, with the closing phase already set.
     fn close_level(&mut self, mut level: Level, commit: bool) {
         let departed = std::mem::take(&mut level.departed);
+        level.settle_staged(commit);
         if let Some(scope) = &mut self.block_entity_tick_items {
             scope.close_transaction(commit);
         }
@@ -488,6 +523,7 @@ impl Game<'_> {
                 outer
                     .removed_block_entities
                     .extend(level.removed_block_entities);
+                outer.unjournaled_blocks.extend(level.unjournaled_blocks);
                 for (pos, state) in level.blocks {
                     outer.blocks.entry(pos).or_insert(state);
                 }
@@ -650,26 +686,52 @@ impl Game<'_> {
         let Some(level) = self.transactions.last_mut() else {
             return;
         };
-        level
-            .block_entities
-            .entry(pos)
-            .or_insert_with(|| Kept::capture(&self.world, &self.hoppers, pos));
+        level.block_entities.entry(pos).or_insert_with(|| {
+            Kept::capture(
+                &self.world,
+                &self.hoppers,
+                &self.be_anims.gateway_servers,
+                pos,
+            )
+        });
     }
     /// Puts back the block entity at `pos` that a transaction removed, as `kept` holds it, with
-    /// its generation, where none stands there now.
+    /// its generation and ticker, where none stands there now.
     fn restore_removed_block_entity(&mut self, pos: Pos, kept: &Kept) {
-        let Some(entity) = &kept.entity else {
+        let (Some(entity), Some(generation)) = (&kept.entity, kept.generation) else {
             return;
         };
         if self.world.block_entities.get(&pos).is_some() {
             return;
         }
-        self.world.block_entities.insert(pos, entity.clone());
-        if let Some(generation) = kept.generation {
-            self.world
-                .block_entities
-                .restore_generation(pos, generation);
-            self.world.block_entities.reattach_retired(pos, generation);
+        self.world
+            .block_entities
+            .restore_removed(pos, entity.clone(), generation, kept.ticker);
+        self.world.block_entities.reattach_retired(pos, generation);
+    }
+    /// Whether `a` and `b` are states of one block (`BlockState.is(Block)`).
+    fn same_block(&self, a: BlockStateId, b: BlockStateId) -> bool {
+        let registry = &self.pack.assets.registry;
+        a == b
+            || matches!(
+                (registry.state(a), registry.state(b)),
+                (Some(a), Some(b)) if a.name == b.name
+            )
+    }
+    /// Notes that a block write the open transaction doesn't keep put another block at `pos`.
+    /// A write that changes only the state's properties (a chest turned) keeps the block, and
+    /// an abort still puts back the block entity the transaction removed there.
+    pub(in crate::game) fn note_unjournaled_block(
+        &mut self,
+        pos: [i32; 3],
+        before: BlockStateId,
+        after: BlockStateId,
+    ) {
+        if self.same_block(before, after) {
+            return;
+        }
+        if let Some(level) = self.transactions.last_mut() {
+            level.unjournaled_blocks.insert((pos[0], pos[1], pos[2]));
         }
     }
     /// Removes the block entity at `pos`, kept whole by the open transaction, which puts it back
@@ -914,18 +976,35 @@ impl Game<'_> {
         level.after.push(After::Block(key));
         self.world.set_stored(pos[0], pos[1], pos[2], state)
     }
-    /// A mod's `Level.setBlock(pos, state, flags)` inside a transaction: stored only, keeping
-    /// the old state for an abort, and set with `flags` (and a mod block's block entity) at the
-    /// root commit. Until then the old block entity stays and the new block's isn't made.
-    /// `None` outside a transaction, where the caller writes at once; `Some(false)` for an
-    /// unchanged state, as `Level.setBlock` refuses one.
+    /// Makes a mod's block writes join the innermost open transaction and those opened inside
+    /// it: a contact action's, whose writes a panic rolls back. In any other transaction a
+    /// mod's block write stores at once, and an abort leaves it.
+    pub(in crate::game) fn keep_mod_blocks(&mut self) {
+        if let Some(level) = self.transactions.last_mut() {
+            level.keeps_mod_blocks = true;
+        }
+    }
+    /// Whether a mod's block writes join the innermost open transaction (`keep_mod_blocks`).
+    pub(in crate::game) fn keeps_mod_blocks(&self) -> bool {
+        self.transactions
+            .last()
+            .is_some_and(|level| level.keeps_mod_blocks)
+    }
+    /// A mod's `Level.setBlock(pos, state, flags)` inside a contact action (`keep_mod_blocks`):
+    /// stored only, keeping the old state for an abort, and set with `flags` (and a mod block's
+    /// block entity) at the root commit. Until then the old block entity stays and the new
+    /// block's isn't made. `None` anywhere else, where the caller writes at once; `Some(false)`
+    /// for an unchanged state, as `Level.setBlock` refuses one.
     pub(in crate::game) fn journal_mod_block(
         &mut self,
         pos: [i32; 3],
         state: BlockStateId,
         flags: i32,
     ) -> Option<bool> {
-        let level = self.transactions.last_mut()?;
+        let level = self
+            .transactions
+            .last_mut()
+            .filter(|level| level.keeps_mod_blocks)?;
         let key = (pos[0], pos[1], pos[2]);
         let old = self.world.block(pos[0], pos[1], pos[2]);
         if old == state {
@@ -948,6 +1027,18 @@ impl Game<'_> {
     /// Queue a reusable interaction effect for the outermost successful commit.
     pub(super) fn defer_effect(&mut self, effect: DeferredEffect) {
         self.after_commit(After::Effect(effect));
+    }
+    /// `after_commit` for a caller holding only `&self`: inside a transaction it is staged
+    /// with the innermost one, so an abort drops it; with none open it comes back for the
+    /// caller to queue.
+    pub(in crate::game) fn stage_after_commit(&self, after: After) -> Option<After> {
+        match self.transactions.last() {
+            Some(level) => {
+                level.staged.borrow_mut().push(after);
+                None
+            }
+            None => Some(after),
+        }
     }
     /// Runs `after` at once, or at the root commit inside a transaction.
     pub(super) fn after_commit(&mut self, after: After) {
@@ -1001,8 +1092,8 @@ impl Game<'_> {
             After::Drop(pos, stack) => {
                 self.spawn_item(stack, pos.map(|p| f64::from(p) + 0.5), [0.0; 3], 10);
             }
-            After::GivePickup(uuid) => {
-                self.native_as_player(uuid, |g| g.give_pickup());
+            After::GivePickup(uuid, stack) => {
+                self.native_as_player(uuid, |g| g.give_pickup(stack));
             }
             After::InventoryTrigger(uuid) => {
                 self.native_as_player(uuid, |g| {
@@ -1024,7 +1115,9 @@ impl Game<'_> {
                     g.drop_plain(stack);
                 });
             }
-            After::Spawn(at, stack) => self.spawn_item(stack, at, [0.0; 3], 10),
+            After::Spawn(at, stack) => {
+                let _ = self.spawn_item(stack, at, [0.0; 3], 10);
+            }
             After::Emptied(id) => {
                 let emptied = self
                     .dropped
@@ -1153,6 +1246,23 @@ impl Game<'_> {
         }
 
         for (pos, kept) in level.block_entities {
+            // A block write the transaction doesn't keep (`LevelRef::set_block` stores at once)
+            // put another block there: the old block entity and what it kept stay gone, as
+            // vanilla's `setBlock` drops a block entity its new block can't hold.
+            let block = match level.blocks.get(&pos) {
+                Some(&kept_block) => kept_block,
+                None => self.world.block(pos.0, pos.1, pos.2),
+            };
+            if kept.entity.is_some() && !self.same_block(kept.block, block) {
+                continue;
+            }
+            // Another block entity than the kept one, where such a write replaced the block (stone,
+            // then a chest again), is that write's: it and its own side data stay.
+            if level.unjournaled_blocks.contains(&pos)
+                && self.world.block_entities.generation(&pos) != kept.generation
+            {
+                continue;
+            }
             match (&kept.entity, self.world.block_entities.get_mut(&pos)) {
                 (Some(entity), Some(now)) => {
                     *now = entity.clone();
@@ -1177,6 +1287,11 @@ impl Game<'_> {
             match kept.hopper {
                 Some(hopper) => self.hoppers.insert(pos, hopper),
                 None => self.hoppers.remove(&pos),
+            };
+            let at = [pos.0, pos.1, pos.2];
+            match kept.gateway {
+                Some(gateway) => self.be_anims.gateway_servers.insert(at, gateway),
+                None => self.be_anims.gateway_servers.remove(&at),
             };
         }
         // After the whole entities: a slot kept here was kept before any whole capture of its
@@ -1204,14 +1319,14 @@ impl Game<'_> {
         }
         let bottom_quart = self.world.bottom_y() >> 2;
         for ((qx, qy, qz), biome) in level.biomes {
-            if let Some(chunk) = self.world.chunks.get_mut(&(qx >> 2, qz >> 2)) {
+            self.world.chunks.mutate_chunk((qx >> 2, qz >> 2), |chunk| {
                 std::sync::Arc::make_mut(chunk).set_biome_cell(
                     qx & 3,
                     qy - bottom_quart,
                     qz & 3,
                     biome,
                 );
-            }
+            });
         }
         for (pos, state) in level.blocks {
             self.world.set_stored(pos.0, pos.1, pos.2, state);
@@ -1335,6 +1450,47 @@ include!("transactions/item_entity.rs");
 #[cfg(test)]
 #[path = "transactions/player_tests.rs"]
 mod player_tests;
+
+#[cfg(test)]
+mod staged_tests {
+    use super::{After, Level};
+
+    fn changed(level: &Level) -> Vec<(i32, i32, i32)> {
+        level
+            .after
+            .iter()
+            .map(|after| match after {
+                After::Changed(pos) => *pos,
+                _ => unreachable!("only `Changed` is staged here"),
+            })
+            .collect()
+    }
+
+    fn with_staged() -> Level {
+        let mut level = Level::default();
+        level.after.push(After::Changed((0, 0, 0)));
+        level.staged.borrow_mut().push(After::Changed((1, 0, 0)));
+        level.staged.borrow_mut().push(After::Changed((2, 0, 0)));
+        level
+    }
+
+    #[test]
+    fn what_a_shared_host_staged_follows_the_commit_in_order() {
+        let mut level = with_staged();
+        level.settle_staged(true);
+        assert_eq!(changed(&level), [(0, 0, 0), (1, 0, 0), (2, 0, 0)]);
+    }
+
+    #[test]
+    fn what_a_shared_host_staged_is_dropped_by_an_abort() {
+        let mut level = with_staged();
+        level.settle_staged(false);
+        assert_eq!(changed(&level), [(0, 0, 0)]);
+        // Nothing is left to run at a later close either.
+        level.settle_staged(true);
+        assert_eq!(changed(&level), [(0, 0, 0)]);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -2359,8 +2515,10 @@ mod tests {
         // An item entity: emptied in an aborted transaction, it's back whole; one of four
         // exchanged in a committed one is dropped beside it at the commit; emptied in a
         // committed one, it's gone.
-        game.spawn_item(sticks(4), [0.5, 70.0, 6.5], [0.0; 3], 10);
-        let id = game.dropped.last().unwrap().id;
+        let id = game
+            .spawn_item(sticks(4), [0.5, 70.0, 6.5], [0.0; 3], 10)
+            .expect("spawned sticks");
+
         let entity = mod_api::ItemPlace::ItemEntity { id };
         let count = |game: &Game<'_>| game.dropped.len();
         let items = count(&game);
@@ -2432,8 +2590,9 @@ mod tests {
     }
 
     /// A mod's block writes (`set_block`, `set_block_property`, `remove_block`) in a
-    /// transaction: seen inside it, put back by an abort (as a panic's unwind aborts), even
-    /// after a child committed them, and set for good at the root commit.
+    /// transaction that keeps them (a contact action's): seen inside it, put back by an abort
+    /// (as a panic's unwind aborts), even after a child committed them, and set for good at the
+    /// root commit. In any other transaction they are stored at once.
     #[test]
     #[ignore = "daily"]
     fn a_mods_block_writes_go_back_on_abort_and_stay_on_commit() {
@@ -2449,13 +2608,23 @@ mod tests {
             let log = registry.default_state("minecraft:oak_log").unwrap();
             let flags = BlockUpdateFlags::CLIENTS;
             for x in [0, 2, 4] {
-                assert_eq!(game.level_set_block(level, [x, 64, 0], stone, flags), Ok(true));
+                assert_eq!(
+                    game.level_set_block(level, [x, 64, 0], stone, flags),
+                    Ok(true)
+                );
             }
-            assert_eq!(game.level_set_block(level, [6, 64, 0], log, flags), Ok(true));
+            assert_eq!(
+                game.level_set_block(level, [6, 64, 0], log, flags),
+                Ok(true)
+            );
             let at = |game: &Game<'_>, x| game.world.block(x, 64, 0);
 
             let aborted = game.transaction(|game, _| {
-                assert_eq!(game.level_set_block(level, [0, 64, 0], glowstone, flags), Ok(true));
+                game.keep_mod_blocks();
+                assert_eq!(
+                    game.level_set_block(level, [0, 64, 0], glowstone, flags),
+                    Ok(true)
+                );
                 assert_eq!(at(game, 0), glowstone, "the write is seen inside");
                 game.transaction(|game, _| {
                     assert!(game.level_remove_block(level, [2, 64, 0], false));
@@ -2472,11 +2641,30 @@ mod tests {
             );
 
             let committed = game.transaction(|game, _| {
-                assert_eq!(game.level_set_block(level, [4, 64, 0], glowstone, flags), Ok(true));
+                game.keep_mod_blocks();
+                assert_eq!(
+                    game.level_set_block(level, [4, 64, 0], glowstone, flags),
+                    Ok(true)
+                );
                 Ok::<_, ()>(())
             });
             assert_eq!(committed, Ok(()));
             assert_eq!(at(game, 4), glowstone);
+
+            // Not one that keeps them: stored at once, and an abort leaves them.
+            let aborted = game.transaction(|game, _| {
+                assert_eq!(
+                    game.level_set_block(level, [0, 64, 0], glowstone, flags),
+                    Ok(true)
+                );
+                assert!(game.level_remove_block(level, [2, 64, 0], false));
+                assert!(game.set_block_property_with([6, 64, 0], "axis", "x", 3));
+                Err::<(), ()>(())
+            });
+            assert_eq!(aborted, Err(()));
+            assert_eq!(at(game, 0), glowstone);
+            assert_ne!(at(game, 2), stone);
+            assert_ne!(at(game, 6), log);
             assert!(game.transactions.is_empty());
         });
     }
