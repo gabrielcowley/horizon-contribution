@@ -2,13 +2,21 @@ use super::*;
 use mod_api::BlockMetadata as _;
 use mod_api::{
     BlockState, Compound, DrawContext, EntityRef, GuiEntity, Scene, SceneBlock, SceneClock,
-    SceneEntity, SceneError, SceneParticle, SceneQuad, SceneSection, SceneShading, SceneView,
+    SceneDepth, SceneEntity, SceneError, SceneFace, SceneGroup, SceneOverlay, SceneParticle,
+    SceneParts, ScenePartsError, SceneSection, SceneShading, SceneTexturedQuad, SceneView,
+    SceneWithQuadsError,
 };
+
+type TexturedDraw = ([f32; 4], Scene, SceneView, Vec<SceneTexturedQuad>);
 
 /// A screen's drawing that keeps each scene it is asked to draw and answers with the
 /// refusal its clock's id names (`REFUSALS[id]`), so every named refusal crosses back.
 #[derive(Default)]
-struct Draw(Vec<([f32; 4], Scene, SceneView)>);
+struct Draw {
+    original: Vec<([f32; 4], Scene, SceneView)>,
+    textured: Vec<TexturedDraw>,
+    parts: Vec<([f32; 4], Scene, SceneView, SceneParts)>,
+}
 impl DrawContext for Draw {
     fn draw_scene(
         &mut self,
@@ -16,16 +24,43 @@ impl DrawContext for Draw {
         scene: &Scene,
         view: SceneView,
     ) -> Result<(), SceneError> {
-        self.0.push((rect, scene.clone(), view));
+        self.original.push((rect, scene.clone(), view));
         match scene.clock {
             Some(clock) => REFUSALS.get(clock.id as usize).copied().unwrap_or(Ok(())),
             None => Ok(()),
         }
     }
+
+    fn draw_scene_with_quads(
+        &mut self,
+        rect: [f32; 4],
+        scene: &Scene,
+        view: SceneView,
+        quads: &[SceneTexturedQuad],
+    ) -> Result<(), SceneWithQuadsError> {
+        self.textured
+            .push((rect, scene.clone(), view, quads.to_vec()));
+        scene
+            .clock
+            .map_or(Ok(()), |clock| TEXTURED_ANSWERS[clock.id as usize])
+    }
+
+    fn draw_scene_parts(
+        &mut self,
+        rect: [f32; 4],
+        scene: &Scene,
+        view: SceneView,
+        parts: &SceneParts,
+    ) -> Result<(), ScenePartsError> {
+        self.parts.push((rect, scene.clone(), view, parts.clone()));
+        scene
+            .clock
+            .map_or(Ok(()), |clock| PARTS_ANSWERS[clock.id as usize])
+    }
 }
 
 /// The answer for each clock id.
-const REFUSALS: [Result<(), SceneError>; 20] = [
+const REFUSALS: [Result<(), SceneError>; 16] = [
     Ok(()),
     Err(SceneError::Unavailable),
     Err(SceneError::BadView),
@@ -41,23 +76,62 @@ const REFUSALS: [Result<(), SceneError>; 20] = [
     Err(SceneError::BadParticle { index: 4 }),
     Err(SceneError::BadClock),
     Err(SceneError::NoClock),
-    Err(SceneError::BadSection { index: 7 }),
-    Err(SceneError::TooManyQuads),
-    Err(SceneError::BadQuad { index: 2 }),
-    Err(SceneError::BadBiome),
     Ok(()),
 ];
 
-/// A sign's saved text, as a world saves it.
-fn sign_text() -> Compound {
+const TEXTURED_ANSWERS: [Result<(), SceneWithQuadsError>; 5] = [
+    Ok(()),
+    Err(SceneWithQuadsError::UnknownSprite { index: 0 }),
+    Err(SceneWithQuadsError::BadTexturedQuad { index: 1 }),
+    Err(SceneWithQuadsError::TooManyTexturedQuads),
+    Err(SceneWithQuadsError::Scene(SceneError::TooManyScenes)),
+];
+
+const PARTS_ANSWERS: [Result<(), ScenePartsError>; 10] = [
+    Ok(()),
+    Err(ScenePartsError::Scene(SceneError::TooManyScenes)),
+    Err(ScenePartsError::BadSection { index: 7 }),
+    Err(ScenePartsError::TooManyTexturedQuads),
+    Err(ScenePartsError::BadTexturedQuad { index: 1 }),
+    Err(ScenePartsError::UnknownSprite { index: 0 }),
+    Err(ScenePartsError::TooManyOverlays),
+    Err(ScenePartsError::BadOverlay { index: 2 }),
+    Err(ScenePartsError::NoBlock { index: 9 }),
+    Err(ScenePartsError::BadBiome),
+];
+
+/// Parts with every field set: a section moved, dimmed and hidden, a face with a tint per
+/// corner, an overlay, Ponder's shading and biome, a sign's saved text and a broken block.
+fn parts(face: SceneTexturedQuad) -> SceneParts {
     let mut front = Compound::new();
     front.insert(
         "messages".into(),
         mod_api::Tag::List(vec![mod_api::Tag::String("Create".into()); 4]),
     );
-    let mut data = Compound::new();
-    data.insert("front_text".into(), mod_api::Tag::Compound(front));
-    data
+    let mut sign = Compound::new();
+    sign.insert("front_text".into(), mod_api::Tag::Compound(front));
+    let section = SceneSection::new(1, 1, [0.25, 0.5, -0.75], [0.0, 45.0, 0.0], [1.5, 0.0, -1.5]);
+    SceneParts::new()
+        .with_groups(vec![SceneGroup::new(section).lit(9, 4).drawn(false)])
+        .with_faces(vec![
+            SceneFace::new(face.clone()),
+            SceneFace::new(face).tinted([0xFF00_0000, 0xFFFF_0000, 0xFF00_FF00, 0xFF00_00FF]),
+        ])
+        .with_overlays(vec![SceneOverlay::line(
+            [0.0; 3],
+            [1.0, 2.0, 3.0],
+            1.5,
+            0x80FF_FFFF,
+            SceneDepth::ThroughWalls,
+        )])
+        .with_shading(SceneShading::View {
+            lights: [[0.4, -1.0, 0.7], [-0.4, -0.5, 0.7]],
+        })
+        .with_biome(mod_api::Identifier::parse("minecraft:plains").unwrap())
+        .fluids(true)
+        .with_game_block_entities(vec![(0, sign)])
+        .with_breaking(vec![(1, 6)])
+        .keep_particles(true)
 }
 
 /// What a guide page draws: a scene of blocks alone, then a living one with each part (a
@@ -88,62 +162,7 @@ fn asks(
         [0.5, 1.25, 0.5],
         [0.0, 0.0625, -0.125],
     )];
-    // A scene in sections: a block moved, dimmed and broken in the second, an outline quad
-    // on a sprite in it and a plain one in the scene's frame, Ponder's shading and biome.
-    let lifted = [
-        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.25, 0.5, -0.75, 1.0,
-    ];
-    let sectioned = Scene::new(vec![
-        blocks[0].clone(),
-        blocks[1]
-            .clone()
-            .in_section(1)
-            .breaking(6)
-            .with_game_data(sign_text()),
-    ])
-    .with_sections(vec![
-        SceneSection::new(),
-        SceneSection::new()
-            .transformed(lifted)
-            .lit(9, 4)
-            .drawn(false),
-    ])
-    .with_quads(vec![
-        SceneQuad::new(
-            [
-                [0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [1.0, 1.0, 0.0],
-                [1.0, 0.0, 0.0],
-            ],
-            0x80FF_FFFF,
-        )
-        .colored([0xFF00_0000, 0xFFFF_0000, 0xFF00_FF00, 0xFF00_00FF])
-        .sprite(
-            "ponder:white",
-            [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
-        )
-        .in_section(1)
-        .shaded(true)
-        .culled(true),
-        SceneQuad::new(
-            [
-                [-1.0, 0.0, -1.0],
-                [-1.0, 0.0, 2.0],
-                [2.0, 0.0, 2.0],
-                [2.0, 0.0, -1.0],
-            ],
-            0x4000_0000,
-        ),
-    ])
-    .with_shading(SceneShading::View {
-        lights: [[0.4, -1.0, 0.7], [-0.4, -0.5, 0.7]],
-    })
-    .with_biome(mod_api::Identifier::parse("minecraft:plains").unwrap());
-    let mut asks = vec![
-        (rect, Scene::new(blocks.clone()), view, Ok(())),
-        (rect, sectioned, view, Ok(())),
-    ];
+    let mut asks = vec![(rect, Scene::new(blocks.clone()), view, Ok(()))];
     for (id, answer) in (0u32..).zip(REFUSALS) {
         let clock = SceneClock::new(id, 40 + u64::from(id), 0.375).animate_blocks(id % 2 == 0);
         let scene = Scene::new(blocks.clone())
@@ -230,7 +249,7 @@ fn a_native_mods_screen_draw_reaches_the_draw_contexts_scene() {
             .into_iter()
             .map(|(r, s, v, _)| (r, s, v))
             .collect();
-        assert_eq!(draw.0, sent);
+        assert_eq!(draw.original, sent);
     });
 }
 
@@ -264,22 +283,87 @@ fn a_wasm_mods_scene_crosses_whole_with_each_part_and_each_refusal_comes_back() 
             assert_eq!(answers.last(), Some(&answer));
             sent.push((rect, scene, view));
         }
+        let (rect, control, view) = sent[0].clone();
+        let quads = vec![
+            SceneTexturedQuad::new(
+                "guide:gui/checker",
+                [
+                    [0.0, 0.5, -1.0],
+                    [2.0, 0.5, -1.0],
+                    [2.0, 2.0, -1.0],
+                    [0.0, 2.0, -1.0],
+                ],
+                [[0.125, 0.75], [0.75, 0.875], [0.75, 0.0], [0.125, 0.0]],
+                0xD025_4080,
+            ),
+            SceneTexturedQuad::new(
+                "minecraft:block/water_flow",
+                [
+                    [0.0, 1.25, 0.0],
+                    [1.0, 1.0, 0.0],
+                    [1.0, 1.0, 1.0],
+                    [0.0, 1.25, 1.0],
+                ],
+                [[0.75, 0.875], [0.5, 0.25], [0.25, 0.125], [0.125, 0.25]],
+                0x803F_76E4,
+            ),
+        ];
+        let mut textured = Vec::new();
+        for (id, answer) in (0u32..).zip(TEXTURED_ANSWERS) {
+            let scene = control.clone().with_clock(SceneClock::new(id, 1, 0.25));
+            assert_eq!(
+                guest::Guest.draw_scene_with_quads(rect, &scene, view, &quads),
+                answer
+            );
+            textured.push((rect, scene, view, quads.clone()));
+        }
+        let mut whole = vec![(rect, control.clone(), view, SceneParts::new())];
+        assert_eq!(
+            guest::Guest.draw_scene_parts(rect, &control, view, &whole[0].3),
+            Ok(())
+        );
+        for (id, answer) in (0u32..).zip(PARTS_ANSWERS) {
+            let scene = control.clone().with_clock(SceneClock::new(id, 1, 0.25));
+            let parts = parts(quads[0].clone());
+            assert_eq!(
+                guest::Guest.draw_scene_parts(rect, &scene, view, &parts),
+                answer
+            );
+            whole.push((rect, scene, view, parts));
+        }
+
+        // Link the pre-feature import by its Wasm name and replay a block-only call
+        // in the old positional wire form, without the current Scene encoder.
+        let id = boundary::import_by_name("DrawContext::draw_scene#d4bf886d1a93fd8c").unwrap();
+        let mut input = Writer::new();
+        input.put(&rect);
+        input.put(&[0u32; 3]); // Empty blocks, entities and particles lists.
+        input.put(&0u8); // No clock.
+        input.put(&view.center);
+        input.put(&view.yaw);
+        input.put(&view.pitch);
+        input.put(&view.scale);
+        let mut output = Writer::new();
+        // SAFETY: the same live frame is used synchronously.
+        unsafe { boundary::serve(id, pointer, input.bytes(), &mut output) }.unwrap();
+        assert_eq!(
+            Reader::decode::<Result<(), SceneError>>(output.bytes()),
+            Ok(Ok(()))
+        );
+        sent.push((rect, Scene::new(Vec::new()), view));
         guest::set_transport(None);
         drop(cx);
         // Every named refusal came back as itself, and the host was handed exactly what
-        // the guest drew: blocks, both entities, the particle and the clock; and the
-        // sections, quads, shading and biome of the scene in sections.
-        let mut expected = vec![Ok(()), Ok(())];
+        // the guest drew: blocks, both entities, the particle and the clock.
+        let mut expected = vec![Ok(())];
         expected.extend(REFUSALS);
         assert_eq!(answers, expected);
-        assert_eq!(draw.0.len(), 22);
-        assert_eq!(draw.0[1].1.sections.len(), 2);
-        assert_eq!(draw.0[1].1.quads.len(), 2);
-        assert_eq!(draw.0[1].1.blocks[1].breaking, Some(6));
-        assert_eq!(draw.0[1].1.blocks[1].game_data, Some(sign_text()));
-        assert_eq!(draw.0[2].1.blocks.len(), 2);
-        assert_eq!(draw.0[2].1.entities.len(), 2);
-        assert_eq!(draw.0[2].1.particles.len(), 1);
-        assert_eq!(draw.0, sent);
+        assert_eq!(draw.original.len(), 18);
+        assert_eq!(draw.original[1].1.blocks.len(), 2);
+        assert_eq!(draw.original[1].1.entities.len(), 2);
+        assert_eq!(draw.original[1].1.particles.len(), 1);
+        assert_eq!(draw.original, sent);
+        assert_eq!(draw.textured, textured);
+        assert_eq!(draw.parts, whole);
     });
 }

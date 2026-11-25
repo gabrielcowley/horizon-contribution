@@ -4,6 +4,8 @@ use crate::{BlockState, Compound, Identifier, item::containers::ModBlockEntityFi
 
 /// A mod block entity's type and public fields supplied to a screen's drawing Part.
 /// This is not a live entity: internal cache and revision identities never cross the API.
+/// With a scene clock and a native scene ticker registered for this type, these values
+/// seed the ticking copy. Changes to the inputs or a clock rewind reset that copy.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
@@ -21,9 +23,8 @@ impl SceneBlockEntity {
     }
 }
 
-/// One block of a scene a mod draws in a screen: its local position and state, the
-/// optional mod block entity drawn by its Part as in the world, the section it belongs to,
-/// and how far it is broken.
+/// One block of a scene a mod draws in a screen: its local position and state, and the
+/// optional mod block entity drawn by its Part as in the world.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
@@ -35,190 +36,12 @@ pub struct SceneBlock {
     pub state: BlockState,
     /// Optional owned block entity drawing data.
     pub entity: Option<SceneBlockEntity>,
-    /// The index in `Scene::sections` of the section the block belongs to: it moves, turns
-    /// and is lit with it, and its faces are culled against that section's blocks only.
-    /// Ignored in a scene with no sections.
-    pub section: u32,
-    /// How far the block is broken: destroy stage 0 to 9, drawn over its model as the world
-    /// draws a block being mined. Past 9 draws no overlay.
-    pub breaking: Option<u8>,
-    /// The saved data of the game's own block entity at this block (a sign's text, a
-    /// banner's patterns, a lectern's book), as a world loads it. A block whose state has a
-    /// game block entity with a renderer (a chest, a sign, a banner, a skull, a bell…) is
-    /// drawn by that renderer as in the world, with this data, or with the type's defaults
-    /// without it. Nothing in a scene ticks, so a chest stays shut. Ignored when `entity`
-    /// is set.
-    pub game_data: Option<Compound>,
 }
 
 impl SceneBlock {
-    /// Describe one scene-local block and optional entity, in section 0, unbroken.
+    /// Describe one scene-local block and optional entity.
     pub fn new(pos: [i32; 3], state: BlockState, entity: Option<SceneBlockEntity>) -> Self {
-        Self {
-            pos,
-            state,
-            entity,
-            section: 0,
-            breaking: None,
-            game_data: None,
-        }
-    }
-    /// The same block with its game block entity's saved data.
-    pub fn with_game_data(mut self, data: Compound) -> Self {
-        self.game_data = Some(data);
-        self
-    }
-    /// The same block in section `section`.
-    pub fn in_section(mut self, section: u32) -> Self {
-        self.section = section;
-        self
-    }
-    /// The same block broken to destroy stage `stage` (0 to 9).
-    pub fn breaking(mut self, stage: u8) -> Self {
-        self.breaking = Some(stage);
-        self
-    }
-}
-
-/// Light packed as `BlockEntityDrawContext::light` packs it, full bright: 16 times sky
-/// light 15 in bits 0..8 and 16 times block light 15 in bits 8..16.
-pub const SCENE_FULL_BRIGHT: u32 = 240 | 240 << 8;
-
-/// A part of a scene that moves, turns and is lit as one: what Ponder calls a world
-/// section. Every block, block entity and quad in it is drawn through `transform` and
-/// lit by `light`, in the same depth as the rest of the scene, so sections hide each
-/// other where they cross.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-#[derive(horizon_mod_api_macros::Wire)]
-pub struct SceneSection {
-    /// A column-major affine 4 by 4 matrix, in scene blocks, applied to everything in the
-    /// section before the view. The bottom row must be `0, 0, 0, 1`.
-    pub transform: [f32; 16],
-    /// The light everything in the section is drawn with, packed as [`SCENE_FULL_BRIGHT`]
-    /// is: through the client's lightmap, as world blocks are lit.
-    pub light: u32,
-    /// Whether the section is drawn. A section that isn't still stands in the scene's
-    /// level, so particles land on its blocks.
-    pub drawn: bool,
-}
-
-impl SceneSection {
-    /// A drawn section, in place and full bright.
-    pub fn new() -> Self {
-        Self {
-            transform: [
-                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-            ],
-            light: SCENE_FULL_BRIGHT,
-            drawn: true,
-        }
-    }
-    /// The same section through `transform` (column major).
-    pub fn transformed(mut self, transform: [f32; 16]) -> Self {
-        self.transform = transform;
-        self
-    }
-    /// The same section lit by block light `block` and sky light `sky`, each 0 to 15.
-    pub fn lit(mut self, block: u8, sky: u8) -> Self {
-        self.light = (u32::from(sky.min(15)) * 16) | ((u32::from(block.min(15)) * 16) << 8);
-        self
-    }
-    /// The same section drawn or not.
-    pub fn drawn(mut self, drawn: bool) -> Self {
-        self.drawn = drawn;
-        self
-    }
-}
-
-impl Default for SceneSection {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// How a scene's faces are shaded.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-#[derive(horizon_mod_api_macros::Wire)]
-pub enum SceneShading {
-    /// By the face's direction in the scene, as world blocks are: 1 on top, 0.5 underneath,
-    /// 0.8 north and south, 0.6 east and west.
-    Faces,
-    /// By two lights fixed to the view, as the game lights models in its GUI:
-    /// `min(1, (max(0, l0·n) + max(0, l1·n)) · 0.6 + 0.4)`, with `n` the face's normal after
-    /// its section's transform and the view, in the view's frame (x right, y up, z toward
-    /// the viewer). A face its model marks as not shaded takes the value for `n` straight up.
-    View {
-        /// The two lights' directions, in the view's frame.
-        lights: [[f32; 3]; 2],
-    },
-}
-
-/// A quad drawn in a scene's own depth, among its blocks: an outline's edge or face, a
-/// shadow under the scene, a flash over it. Blocks in front of it hide it.
-#[derive(Clone, Debug, PartialEq)]
-#[non_exhaustive]
-#[derive(horizon_mod_api_macros::Wire)]
-pub struct SceneQuad {
-    /// The corners in scene blocks, in a model face's order (top left, bottom left, bottom
-    /// right, top right as seen from the front).
-    pub corners: [[f32; 3]; 4],
-    /// Each corner's colour, ARGB; the quad's colour runs between them.
-    pub colors: [u32; 4],
-    /// The GUI sprite the quad shows (as `DrawContext::sprite` names one), or none for
-    /// plain colour.
-    pub sprite: Option<String>,
-    /// Each corner's place on the sprite, 0 to 1. Ignored without a sprite.
-    pub uv: [[f32; 2]; 4],
-    /// The section whose transform and light the quad follows; none for the scene's own
-    /// frame, full bright.
-    pub section: Option<u32>,
-    /// Whether the scene's shading darkens it by its facing, as it does a block's face.
-    pub shade: bool,
-    /// Whether it is left out when it faces away from the viewer.
-    pub cull: bool,
-}
-
-impl SceneQuad {
-    /// A quad of plain colour `argb` with `corners`, in the scene's own frame, unshaded and
-    /// seen from both sides.
-    pub fn new(corners: [[f32; 3]; 4], argb: u32) -> Self {
-        Self {
-            corners,
-            colors: [argb; 4],
-            sprite: None,
-            uv: [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
-            section: None,
-            shade: false,
-            cull: false,
-        }
-    }
-    /// The same quad with a colour per corner.
-    pub fn colored(mut self, colors: [u32; 4]) -> Self {
-        self.colors = colors;
-        self
-    }
-    /// The same quad showing `sprite` at `uv`.
-    pub fn sprite(mut self, sprite: impl Into<String>, uv: [[f32; 2]; 4]) -> Self {
-        self.sprite = Some(sprite.into());
-        self.uv = uv;
-        self
-    }
-    /// The same quad in section `section`.
-    pub fn in_section(mut self, section: u32) -> Self {
-        self.section = Some(section);
-        self
-    }
-    /// The same quad shaded by the scene's shading, or not.
-    pub fn shaded(mut self, shade: bool) -> Self {
-        self.shade = shade;
-        self
-    }
-    /// The same quad culled when it faces away, or not.
-    pub fn culled(mut self, cull: bool) -> Self {
-        self.cull = cull;
-        self
+        Self { pos, state, entity }
     }
 }
 
@@ -314,17 +137,13 @@ impl SceneParticle {
     }
 }
 
-/// A scene's own clock. The scene keeps its live particles from one draw to the next
-/// under `id` and the calling mod (one id per scene a mod's screens show; two mods'
-/// id 1 are two scenes). When `tick` is ahead of the tick the scene last ran, it runs
-/// the ticks in between: the blocks' animate ticks when `animate_blocks` is set
-/// ([`SCENE_ANIMATE_PICKS`] picks a tick among the scene's own blocks), then the
-/// particles'. A jump of more than [`SCENE_CATCH_UP`] ticks (a page resumed) starts the
-/// scene over from no particles and runs only the last [`SCENE_CATCH_UP`] ticks. The
-/// same tick again is a paused scene: nothing is added and nothing moves. A tick behind
-/// the last one, or a scene whose blocks or entities changed, starts the scene over with
-/// no particles. Each tick's randomness is seeded from `id` and the tick, so the same
-/// ticks give the same picture.
+/// A scene's own clock, kept under `id` and the calling mod (give each scene its own id).
+/// When `tick` advances, the scene runs the ticks in between: the blocks' animate ticks
+/// when `animate_blocks` is set, any registered native scene-only block entity tickers,
+/// then the particles' ticks. A jump of more than [`SCENE_CATCH_UP`] ticks resets the
+/// ticking copies, clears particles and runs only the last [`SCENE_CATCH_UP`] ticks. The
+/// same tick again does not run anything. A tick behind the last one, or changed scene
+/// inputs, starts the scene over. Each tick's randomness is seeded from `id` and `tick`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
@@ -370,23 +189,77 @@ pub const SCENE_MAX_ENTITIES: usize = 16;
 /// together: past it no new particle is added, and more than this many to add at once
 /// is [`SceneError::TooManyParticles`].
 pub const SCENE_MAX_PARTICLES: usize = 512;
-/// The most quads one scene takes ([`SceneError::TooManyQuads`]).
-pub const SCENE_MAX_QUADS: usize = 16_384;
-/// The most sections one scene takes ([`SceneError::BadSection`]).
-pub const SCENE_MAX_SECTIONS: usize = 4096;
-/// The most scenes with entities or particles that animate in one frame
+/// The most living scenes that animate in one frame
 /// ([`SceneError::TooManyScenes`]).
 pub const SCENE_MAX_ANIMATING: usize = 4;
+/// The most overlays one scene draw takes ([`SceneOverlayError::TooManyOverlays`]).
+pub const SCENE_MAX_OVERLAYS: usize = 4096;
+
+/// How an overlay is occluded by the scene. Neither mode writes depth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum SceneDepth {
+    /// Visible where it is at or in front of the scene's geometry.
+    Tested,
+    /// Visible even behind the scene's geometry.
+    ThroughWalls,
+}
+
+/// A solid annotation in the scene's block coordinates, with a packed ARGB color.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum SceneOverlay {
+    /// A line whose thickness is measured in GUI pixels, independent of the view scale.
+    Line {
+        /// Starting point in scene coordinates.
+        from: [f32; 3],
+        /// Ending point in scene coordinates.
+        to: [f32; 3],
+        /// Finite, positive width in GUI pixels.
+        width: f32,
+        /// Packed ARGB color, including alpha.
+        argb: u32,
+        /// Occlusion by the scene.
+        depth: SceneDepth,
+    },
+    /// A filled, double-sided quad.
+    Quad {
+        /// Four corners in order around the quad, in scene coordinates.
+        corners: [[f32; 3]; 4],
+        /// Packed ARGB color, including alpha.
+        argb: u32,
+        /// Occlusion by the scene.
+        depth: SceneDepth,
+    },
+}
+
+impl SceneOverlay {
+    /// Describes a solid line. A line seen end-on draws nothing.
+    pub fn line(from: [f32; 3], to: [f32; 3], width: f32, argb: u32, depth: SceneDepth) -> Self {
+        Self::Line {
+            from,
+            to,
+            width,
+            argb,
+            depth,
+        }
+    }
+
+    /// Describes a solid quad. Give the corners in order around its perimeter.
+    pub fn quad(corners: [[f32; 3]; 4], argb: u32, depth: SceneDepth) -> Self {
+        Self::Quad {
+            corners,
+            argb,
+            depth,
+        }
+    }
+}
 
 /// A scene `DrawContext::draw_scene` draws: its blocks, and optionally the entities
-/// standing in it, the particles the mod adds and the clock that ticks them. A scene of
-/// blocks alone (no entities, no particles, and no clock or one with `animate_blocks`
-/// off) keeps no state and reads no clock. Keep one and change its clock each frame.
-///
-/// Its blocks and quads may be split into `sections` that move, turn, fade and hide as
-/// units, all in one depth. A scene with no sections is one section in place, full
-/// bright: as scenes were drawn before sections. `shading` and `biome` say how faces are
-/// shaded and which biome's colours tint grass, foliage and water.
+/// standing in it, the particles the mod adds and the clock that ticks them and any
+/// registered native scene block entity copies. Blocks without a clock do not tick;
+/// disabling [`SceneClock::animate_blocks`] only stops the blocks' animate ticks.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
@@ -399,16 +272,6 @@ pub struct Scene {
     pub particles: Vec<SceneParticle>,
     /// The scene's clock, for a scene that lives.
     pub clock: Option<SceneClock>,
-    /// The scene's sections; blocks and quads name theirs by index. Empty: one section in
-    /// place, full bright.
-    pub sections: Vec<SceneSection>,
-    /// Quads drawn in the scene's depth: outlines, shadows.
-    pub quads: Vec<SceneQuad>,
-    /// How faces are shaded.
-    pub shading: SceneShading,
-    /// The biome whose colours tint the scene's grass, foliage and water (`minecraft:plains`);
-    /// none for a fixed default grass colour.
-    pub biome: Option<Identifier>,
 }
 
 impl Scene {
@@ -419,31 +282,7 @@ impl Scene {
             entities: Vec::new(),
             particles: Vec::new(),
             clock: None,
-            sections: Vec::new(),
-            quads: Vec::new(),
-            shading: SceneShading::Faces,
-            biome: None,
         }
-    }
-    /// The same scene split into `sections`.
-    pub fn with_sections(mut self, sections: Vec<SceneSection>) -> Self {
-        self.sections = sections;
-        self
-    }
-    /// The same scene with `quads` in its depth.
-    pub fn with_quads(mut self, quads: Vec<SceneQuad>) -> Self {
-        self.quads = quads;
-        self
-    }
-    /// The same scene shaded by `shading`.
-    pub fn with_shading(mut self, shading: SceneShading) -> Self {
-        self.shading = shading;
-        self
-    }
-    /// The same scene tinted by `biome`'s colours.
-    pub fn with_biome(mut self, biome: Identifier) -> Self {
-        self.biome = Some(biome);
-        self
     }
     /// The same scene on `clock`.
     pub fn with_clock(mut self, clock: SceneClock) -> Self {
@@ -459,6 +298,62 @@ impl Scene {
     pub fn with_particles(mut self, particles: Vec<SceneParticle>) -> Self {
         self.particles = particles;
         self
+    }
+}
+
+/// A rigid pose for a consecutive group in [`Scene::blocks`], without moving
+/// the scene camera or rounding its blocks to different cells.
+#[derive(Clone, Copy, Debug, PartialEq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct SceneSection {
+    /// Index of the first block in the section.
+    pub first: u32,
+    /// Number of blocks in the section, at least one.
+    pub count: u32,
+    /// Translation in scene axes, in blocks, applied after rotation.
+    pub translation: [f32; 3],
+    /// Angles in degrees, applied about the scene's X, Y, then Z axes.
+    pub rotation: [f32; 3],
+    /// Rotation center in the original scene coordinates, in blocks.
+    pub pivot: [f32; 3],
+}
+
+impl SceneSection {
+    /// Pose `count` blocks starting at `first` around `pivot`, then translate them.
+    pub fn new(
+        first: u32,
+        count: u32,
+        translation: [f32; 3],
+        rotation: [f32; 3],
+        pivot: [f32; 3],
+    ) -> Self {
+        Self {
+            first,
+            count,
+            translation,
+            rotation,
+            pivot,
+        }
+    }
+}
+
+/// Why a draw with posed sections was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum SceneSectionError {
+    /// The same refusal as an ordinary `DrawContext::draw_scene`.
+    Scene(SceneError),
+    /// The section had an empty, overlapping, unsorted or out-of-range block
+    /// span, or a pose that could not be represented.
+    BadSection {
+        /// Index in the caller's section list.
+        index: u32,
+    },
+}
+
+impl From<SceneError> for SceneSectionError {
+    fn from(error: SceneError) -> Self {
+        Self::Scene(error)
     }
 }
 
@@ -519,21 +414,348 @@ pub enum SceneError {
     BadClock,
     /// Entities or particles without a clock.
     NoClock,
-    /// A section's transform isn't finite or isn't affine, more than
-    /// [`SCENE_MAX_SECTIONS`] sections, or a block or quad names a section the scene
-    /// doesn't have.
-    BadSection {
-        /// The section's index: the one at fault, or the one named.
+}
+
+/// Why `draw_scene_with_overlays` refused a scene or its overlays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum SceneOverlayError {
+    /// The base scene was refused. If the animation budget was exceeded, the scene's
+    /// blocks, last state and overlays were still drawn.
+    Scene(SceneError),
+    /// More than [`SCENE_MAX_OVERLAYS`] overlays.
+    TooManyOverlays,
+    /// Nonfinite overlay coordinates, nonfinite projected coordinates, or a nonfinite
+    /// or nonpositive line width.
+    BadOverlay {
+        /// The overlay's index in `overlays`.
         index: u32,
     },
-    /// More than [`SCENE_MAX_QUADS`] quads.
-    TooManyQuads,
-    /// A quad's corners or UVs aren't finite, or it names a sprite the GUI atlas doesn't
-    /// have.
-    BadQuad {
+}
+
+impl From<SceneError> for SceneOverlayError {
+    fn from(error: SceneError) -> Self {
+        Self::Scene(error)
+    }
+}
+
+/// The most textured quads one scene draw takes.
+pub const SCENE_MAX_TEXTURED_QUADS: usize = 4096;
+
+/// A two-sided textured face in the scene, drawn at its own depth and clipped with
+/// the blocks. Draw with [`DrawContext::draw_scene_with_quads`](crate::DrawContext::draw_scene_with_quads).
+#[derive(Clone, Debug, PartialEq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct SceneTexturedQuad {
+    /// An existing sprite in the GUI/scene atlas, e.g. `minecraft:block/water_still`
+    /// (also `block/water_still`) or `mymod:gui/panel`.
+    pub sprite: String,
+    /// Scene-local corners in order around the face, in blocks.
+    pub corners: [[f32; 3]; 4],
+    /// One `[u, v]` per corner, each component in `0..=1` relative to the sprite;
+    /// `[0, 0]` is its top left.
+    pub uv: [[f32; 2]; 4],
+    /// Sprite multiplier, including alpha, in `0xAARRGGBB` (opaque white leaves it unchanged).
+    pub tint: u32,
+}
+
+impl SceneTexturedQuad {
+    /// A face with its four corners and matching sprite coordinates, and an ARGB tint.
+    pub fn new(
+        sprite: impl Into<String>,
+        corners: [[f32; 3]; 4],
+        uv: [[f32; 2]; 4],
+        tint: u32,
+    ) -> Self {
+        Self {
+            sprite: sprite.into(),
+            corners,
+            uv,
+            tint,
+        }
+    }
+}
+
+/// Why [`DrawContext::draw_scene_with_quads`](crate::DrawContext::draw_scene_with_quads)
+/// refused a scene. Invalid quads leave the drawing and scene's clock unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum SceneWithQuadsError {
+    /// The underlying scene draw's result. [`SceneError::TooManyScenes`] still draws
+    /// the blocks, textured quads and last state without advancing the clock.
+    Scene(SceneError),
+    /// More than [`SCENE_MAX_TEXTURED_QUADS`] textured quads.
+    TooManyTexturedQuads,
+    /// One of the quad's coordinates isn't finite or is more than 30 million blocks
+    /// from the origin on an axis, or a UV component is not in `0..=1`.
+    BadTexturedQuad {
         /// The quad's index in `quads`.
+        index: u32,
+    },
+    /// The quad's sprite isn't in the GUI/scene atlas.
+    UnknownSprite {
+        /// The quad's index in `quads`.
+        index: u32,
+    },
+}
+
+/// Light packed as `BlockEntityDrawContext::light` packs it, full bright: 16 times sky
+/// light 15 in bits 0..8 and 16 times block light 15 in bits 8..16.
+pub const SCENE_FULL_BRIGHT: u32 = 240 | 240 << 8;
+
+/// A posed section of a scene, the light it is drawn with and whether it is drawn at all:
+/// what [`SceneParts`] takes in place of a bare [`SceneSection`]. A section fades by its
+/// light, as Ponder's do, and is never see-through.
+#[derive(Clone, Copy, Debug, PartialEq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct SceneGroup {
+    /// The section's blocks and pose.
+    pub section: SceneSection,
+    /// The light its blocks, fluids and block entities are drawn with, packed as
+    /// [`SCENE_FULL_BRIGHT`] is: through the client's lightmap, as world blocks are lit.
+    pub light: u32,
+    /// Whether the section is drawn. One that isn't still stands in the scene's level, so
+    /// particles land on its blocks.
+    pub drawn: bool,
+}
+
+impl SceneGroup {
+    /// `section`, drawn full bright.
+    pub fn new(section: SceneSection) -> Self {
+        Self {
+            section,
+            light: SCENE_FULL_BRIGHT,
+            drawn: true,
+        }
+    }
+    /// The same section lit by block light `block` and sky light `sky`, each 0 to 15.
+    pub fn lit(mut self, block: u8, sky: u8) -> Self {
+        self.light = (u32::from(sky.min(15)) * 16) | ((u32::from(block.min(15)) * 16) << 8);
+        self
+    }
+    /// The same section drawn or not.
+    pub fn drawn(mut self, drawn: bool) -> Self {
+        self.drawn = drawn;
+        self
+    }
+}
+
+/// A textured face of a scene, with a tint of its own at each corner where one colour is
+/// not enough (a shadow that fades out).
+#[derive(Clone, Debug, PartialEq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct SceneFace {
+    /// The face.
+    pub quad: SceneTexturedQuad,
+    /// Each corner's tint in place of the quad's own, ARGB, run between the corners.
+    pub corner_tints: Option<[u32; 4]>,
+}
+
+impl SceneFace {
+    /// `quad` in its own tint.
+    pub fn new(quad: SceneTexturedQuad) -> Self {
+        Self {
+            quad,
+            corner_tints: None,
+        }
+    }
+    /// The same face with a tint per corner.
+    pub fn tinted(mut self, corners: [u32; 4]) -> Self {
+        self.corner_tints = Some(corners);
+        self
+    }
+}
+
+/// How a scene's faces are shaded.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum SceneShading {
+    /// By the face's direction in the scene, as world blocks are: 1 on top, 0.5 underneath,
+    /// 0.8 north and south, 0.6 east and west.
+    #[default]
+    Faces,
+    /// By two lights fixed to the view, as the game lights models in its GUI:
+    /// `min(1, (max(0, l0·n) + max(0, l1·n)) · 0.6 + 0.4)`, with `n` the face's normal after
+    /// its section's pose and the view, in the view's frame (x right, y up, z toward the
+    /// viewer). A face its model marks as not shaded takes the value for `n` straight up.
+    /// Entities and textured faces keep the shading they have.
+    View {
+        /// The two lights' directions, in the view's frame.
+        lights: [[f32; 3]; 2],
+    },
+}
+
+/// What [`DrawContext::draw_scene_parts`](crate::DrawContext::draw_scene_parts) draws with a
+/// scene's blocks, all in one depth. With every field at its default it draws what
+/// `draw_scene` does.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct SceneParts {
+    /// Posed, lit and hidden ranges of the blocks, under `draw_scene_with_sections`' rules.
+    /// Blocks outside them stay still, full bright.
+    pub groups: Vec<SceneGroup>,
+    /// Textured faces in the scene's depth, under `draw_scene_with_quads`' rules.
+    pub faces: Vec<SceneFace>,
+    /// Lines and solid quads over the scene, under `draw_scene_with_overlays`' rules.
+    pub overlays: Vec<SceneOverlay>,
+    /// How blocks, fluids and block entities are shaded.
+    pub shading: SceneShading,
+    /// The biome whose colours tint grass, foliage and water (`minecraft:plains`); none for
+    /// a fixed default grass colour and vanilla's default water.
+    pub biome: Option<Identifier>,
+    /// Whether a block holding a fluid (water, lava, a mod's fluid or a waterlogged block)
+    /// has its surface drawn as the world draws it. Heights, flow and hidden faces come from
+    /// the blocks of its own section.
+    pub fluids: bool,
+    /// Whether a block with one of the game's block entity renderers (a chest, a sign, a
+    /// banner, a skull, a bell) is drawn by that renderer, with its `block_data` or else the
+    /// type's defaults. Nothing in a scene ticks, so a chest stays shut.
+    pub game_block_entities: bool,
+    /// The saved data of the game's own block entities, as a world loads it, each with its
+    /// block's index in `Scene::blocks`. Read when `game_block_entities` is set; the data's
+    /// `id` may be left out. Ignored for a block with a `SceneBlock::entity`.
+    pub block_data: Vec<(u32, Compound)>,
+    /// Blocks being broken: the block's index in `Scene::blocks` and its destroy stage, 0 to
+    /// 9, drawn over its model. Past 9 draws no overlay.
+    pub breaking: Vec<(u32, u8)>,
+    /// Whether the scene keeps its particles, and the block entity copies whose inputs stay
+    /// the same, when its blocks, block entities or entities change. Without it such a change
+    /// starts the scene over, as `draw_scene` does. A tick behind the last one always does.
+    pub keep_particles: bool,
+}
+
+impl SceneParts {
+    /// Nothing but the scene's blocks.
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// The same parts with `groups`.
+    pub fn with_groups(mut self, groups: Vec<SceneGroup>) -> Self {
+        self.groups = groups;
+        self
+    }
+    /// The same parts with `faces`.
+    pub fn with_faces(mut self, faces: Vec<SceneFace>) -> Self {
+        self.faces = faces;
+        self
+    }
+    /// The same parts with `overlays`.
+    pub fn with_overlays(mut self, overlays: Vec<SceneOverlay>) -> Self {
+        self.overlays = overlays;
+        self
+    }
+    /// The same parts shaded by `shading`.
+    pub fn with_shading(mut self, shading: SceneShading) -> Self {
+        self.shading = shading;
+        self
+    }
+    /// The same parts tinted by `biome`'s colours.
+    pub fn with_biome(mut self, biome: Identifier) -> Self {
+        self.biome = Some(biome);
+        self
+    }
+    /// The same parts with the blocks' fluids drawn or not.
+    pub fn fluids(mut self, drawn: bool) -> Self {
+        self.fluids = drawn;
+        self
+    }
+    /// The same parts with the game's own block entities drawn, `data` their saved data by
+    /// block index.
+    pub fn with_game_block_entities(mut self, data: Vec<(u32, Compound)>) -> Self {
+        self.game_block_entities = true;
+        self.block_data = data;
+        self
+    }
+    /// The same parts with blocks broken to a destroy stage, by block index.
+    pub fn with_breaking(mut self, breaking: Vec<(u32, u8)>) -> Self {
+        self.breaking = breaking;
+        self
+    }
+    /// The same parts keeping the scene's particles when its inputs change, or not.
+    pub fn keep_particles(mut self, keep: bool) -> Self {
+        self.keep_particles = keep;
+        self
+    }
+}
+
+/// Why [`DrawContext::draw_scene_parts`](crate::DrawContext::draw_scene_parts) refused a
+/// scene. Everything but [`SceneError::TooManyScenes`] draws nothing and leaves the scene's
+/// state unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum ScenePartsError {
+    /// The underlying scene draw's result. [`SceneError::TooManyScenes`] still draws the
+    /// blocks, parts and last state without advancing the clock.
+    Scene(SceneError),
+    /// A section had an empty, overlapping, unsorted or out-of-range block span, or a pose
+    /// that could not be represented.
+    BadSection {
+        /// Index in `groups`.
+        index: u32,
+    },
+    /// More than [`SCENE_MAX_TEXTURED_QUADS`] faces.
+    TooManyTexturedQuads,
+    /// A face's coordinates or UVs, as `draw_scene_with_quads` refuses them.
+    BadTexturedQuad {
+        /// Index in `faces`.
+        index: u32,
+    },
+    /// A face's sprite isn't in the GUI/scene atlas.
+    UnknownSprite {
+        /// Index in `faces`.
+        index: u32,
+    },
+    /// More than [`SCENE_MAX_OVERLAYS`] overlays.
+    TooManyOverlays,
+    /// An overlay's geometry, as `draw_scene_with_overlays` refuses it.
+    BadOverlay {
+        /// Index in `overlays`.
+        index: u32,
+    },
+    /// `block_data` or `breaking` names a block the scene doesn't have.
+    NoBlock {
+        /// The block index named.
         index: u32,
     },
     /// A biome this game doesn't have.
     BadBiome,
+}
+
+impl From<SceneError> for ScenePartsError {
+    fn from(error: SceneError) -> Self {
+        Self::Scene(error)
+    }
+}
+
+impl From<SceneSectionError> for ScenePartsError {
+    fn from(error: SceneSectionError) -> Self {
+        match error {
+            SceneSectionError::Scene(error) => Self::Scene(error),
+            SceneSectionError::BadSection { index } => Self::BadSection { index },
+        }
+    }
+}
+
+impl From<SceneWithQuadsError> for ScenePartsError {
+    fn from(error: SceneWithQuadsError) -> Self {
+        match error {
+            SceneWithQuadsError::Scene(error) => Self::Scene(error),
+            SceneWithQuadsError::TooManyTexturedQuads => Self::TooManyTexturedQuads,
+            SceneWithQuadsError::BadTexturedQuad { index } => Self::BadTexturedQuad { index },
+            SceneWithQuadsError::UnknownSprite { index } => Self::UnknownSprite { index },
+        }
+    }
+}
+
+impl From<SceneOverlayError> for ScenePartsError {
+    fn from(error: SceneOverlayError) -> Self {
+        match error {
+            SceneOverlayError::Scene(error) => Self::Scene(error),
+            SceneOverlayError::TooManyOverlays => Self::TooManyOverlays,
+            SceneOverlayError::BadOverlay { index } => Self::BadOverlay { index },
+        }
+    }
 }

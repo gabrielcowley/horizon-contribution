@@ -5,97 +5,384 @@
 //! its armour stand.
 use super::Game;
 use super::native_block_entity_draw::{BlockEntityDraw, place_turning};
-use glam::{Mat3, Mat4, Vec3};
+use super::native_scene_live::LiveBlockEntity;
+use glam::{Affine3A, EulerRot, Mat4, Quat, Vec3};
 use horizon_client::{
-    block_entity_render::diffuse_lights, containers::BlockEntity, hud::HudBatch, mesher::Vertex,
+    block_entity_render::diffuse_lights,
+    containers::BlockEntity,
+    hud::{HudAtlas, HudBatch, OverlayDepth},
+    hud_layout::abgr,
+    mesher::Vertex,
 };
 use horizon_world::level::data::state_flags;
-use mod_api::SceneView;
+use mod_api::{
+    SCENE_FULL_BRIGHT, SCENE_MAX_OVERLAYS, SCENE_MAX_TEXTURED_QUADS, SceneDepth, SceneError,
+    SceneFace, SceneGroup, SceneOverlay, SceneOverlayError, SceneParts, ScenePartsError,
+    SceneSection, SceneSectionError, SceneShading, SceneTexturedQuad, SceneView,
+    SceneWithQuadsError,
+};
 /// Prepared scene data. Entity fields remain borrowed for the duration of the draw.
 pub(super) struct SceneBlock<'a> {
     pub pos: [i32; 3],
     pub state: horizon_world::registry::BlockStateId,
     pub entity: Option<&'a mod_api::SceneBlockEntity>,
-    /// Its section's index; 0 in a scene with no sections.
-    pub section: usize,
     /// Destroy stage 0 to 9 drawn over it, or none.
     pub breaking: Option<u8>,
     /// Its game block entity's saved data, or none for the type's defaults.
     pub game_data: Option<&'a mod_api::Compound>,
 }
 
-/// What a scene draws besides its blocks, checked: its sections (empty for one in place,
-/// full bright), its own quads, its shading and the biome its tints come from.
-pub(super) struct SceneLook<'a> {
-    pub sections: &'a [mod_api::SceneSection],
-    pub quads: &'a [mod_api::SceneQuad],
-    pub shading: mod_api::SceneShading,
-    pub biome: Option<u16>,
+/// Gives `cells` the saved data and destroy stages `parts` names them by index.
+pub(super) fn apply_block_parts<'a>(
+    cells: &mut [SceneBlock<'a>],
+    parts: &'a SceneParts,
+) -> Result<(), ScenePartsError> {
+    for (index, data) in &parts.block_data {
+        let cell = cells
+            .get_mut(*index as usize)
+            .ok_or(ScenePartsError::NoBlock { index: *index })?;
+        cell.game_data = Some(data);
+    }
+    for &(index, stage) in &parts.breaking {
+        let cell = cells
+            .get_mut(index as usize)
+            .ok_or(ScenePartsError::NoBlock { index })?;
+        cell.breaking = (stage <= 9).then_some(stage);
+    }
+    Ok(())
+}
+
+/// How a scene is drawn, beyond its blocks and view, checked. The default is `draw_scene`'s.
+#[derive(Clone, Copy, Default)]
+pub(super) struct SceneLook {
+    pub(super) shading: SceneShading,
+    /// The biome its tints come from.
+    pub(super) biome: Option<u16>,
+    pub(super) fluids: bool,
+    pub(super) game_block_entities: bool,
+    pub(super) keep_particles: bool,
+}
+
+impl SceneLook {
+    /// `parts`' look, its biome found by `biome`.
+    pub(super) fn of(
+        parts: &SceneParts,
+        biome: impl FnOnce(&str) -> Option<u16>,
+    ) -> Result<Self, ScenePartsError> {
+        let biome = match &parts.biome {
+            Some(name) => Some(biome(&name.to_string()).ok_or(ScenePartsError::BadBiome)?),
+            None => None,
+        };
+        Ok(Self {
+            shading: parts.shading,
+            biome,
+            fluids: parts.fluids,
+            game_block_entities: parts.game_block_entities,
+            keep_particles: parts.keep_particles,
+        })
+    }
 }
 
 /// Vanilla's default water colour (`Biome`'s `water_color` default, plains'), for a scene
 /// that names no biome.
 const DEFAULT_WATER: u32 = 0x3F_76E4;
 
-/// A section's transform as a matrix, when it is finite and affine (a bottom row of
-/// `0, 0, 0, 1`): what `draw_scene` takes.
-pub(super) fn section_matrix(section: &mod_api::SceneSection) -> Option<Mat4> {
-    let t = section.transform;
-    let affine = t[3] == 0.0 && t[7] == 0.0 && t[11] == 0.0 && t[15] == 1.0;
-    (affine && t.iter().all(|v| v.is_finite())).then(|| Mat4::from_cols_array(&t))
+struct SectionPose {
+    range: std::ops::Range<usize>,
+    transform: Affine3A,
+    light: u32,
+    drawn: bool,
 }
 
-/// `scene`'s sections, quads, shading and biome, checked before anything is drawn. A block
-/// naming a section the scene doesn't have is refused by `scene_blocks`.
-pub(super) fn check_look<'a>(
-    scene: &'a mod_api::Scene,
-    biome: impl FnOnce(&str) -> Option<u16>,
-) -> Result<SceneLook<'a>, mod_api::SceneError> {
-    use mod_api::SceneError;
-    if scene.sections.len() > mod_api::SCENE_MAX_SECTIONS {
-        return Err(SceneError::BadSection {
-            index: mod_api::SCENE_MAX_SECTIONS as u32,
-        });
-    }
-    for (index, section) in (0u32..).zip(&scene.sections) {
-        if section_matrix(section).is_none() {
-            return Err(SceneError::BadSection { index });
-        }
-    }
-    if scene.quads.len() > mod_api::SCENE_MAX_QUADS {
-        return Err(SceneError::TooManyQuads);
-    }
-    for (index, quad) in (0u32..).zip(&scene.quads) {
-        if let Some(s) = quad.section
-            && s as usize >= scene.sections.len()
-        {
-            return Err(SceneError::BadSection { index: s });
-        }
-        let finite = quad.corners.iter().flatten().all(|v| v.is_finite())
-            && quad.uv.iter().flatten().all(|v| v.is_finite());
-        if !finite {
-            return Err(SceneError::BadQuad { index });
-        }
-    }
-    let biome = match &scene.biome {
-        Some(name) => Some(biome(&name.to_string()).ok_or(SceneError::BadBiome)?),
-        None => None,
-    };
-    Ok(SceneLook {
-        sections: &scene.sections,
-        quads: &scene.quads,
-        shading: scene.shading,
-        biome,
-    })
+pub(super) struct SceneBlocks<'a, 'b> {
+    pub(super) cells: &'a [SceneBlock<'b>],
+    poses: Vec<SectionPose>,
 }
 
-/// A quad in the scene's blocks, before it is seen: its corners, UVs in the
-/// atlas, ABGR colour, and its outward normal.
+impl<'a, 'b> SceneBlocks<'a, 'b> {
+    pub(super) fn stationary(cells: &'a [SceneBlock<'b>]) -> Self {
+        Self {
+            cells,
+            poses: Vec::new(),
+        }
+    }
+
+    pub(super) fn posed(
+        cells: &'a [SceneBlock<'b>],
+        sections: &[SceneSection],
+    ) -> Result<Self, SceneSectionError> {
+        let mut poses = Vec::with_capacity(sections.len().min(cells.len()));
+        let mut previous_end = 0;
+        for (index, section) in (0u32..).zip(sections) {
+            let invalid = SceneSectionError::BadSection { index };
+            let start = section.first as usize;
+            let end = start.checked_add(section.count as usize).ok_or(invalid)?;
+            if start < previous_end || start == end || end > cells.len() {
+                return Err(invalid);
+            }
+            let [x, y, z] = section.rotation.map(f32::to_radians);
+            let pivot = Vec3::from_array(section.pivot);
+            let translation = Vec3::from_array(section.translation);
+            if ![x, y, z].into_iter().all(f32::is_finite)
+                || !pivot.is_finite()
+                || !translation.is_finite()
+            {
+                return Err(invalid);
+            }
+            let rotation = Quat::from_euler(EulerRot::ZYX, z, y, x);
+            let transform = Affine3A::from_rotation_translation(
+                rotation,
+                translation + (pivot - rotation * pivot),
+            );
+            if !transform.is_finite() {
+                return Err(invalid);
+            }
+            poses.push(SectionPose {
+                range: start..end,
+                transform,
+                light: SCENE_FULL_BRIGHT,
+                drawn: true,
+            });
+            previous_end = end;
+        }
+        Ok(Self { cells, poses })
+    }
+
+    /// The same, each section in its group's light and drawn or not.
+    pub(super) fn grouped(
+        cells: &'a [SceneBlock<'b>],
+        groups: &[SceneGroup],
+    ) -> Result<Self, SceneSectionError> {
+        let sections: Vec<_> = groups.iter().map(|group| group.section).collect();
+        let mut blocks = Self::posed(cells, &sections)?;
+        for (pose, group) in blocks.poses.iter_mut().zip(groups) {
+            (pose.light, pose.drawn) = (group.light, group.drawn);
+        }
+        Ok(blocks)
+    }
+
+    /// Culling group `group`'s pose; none for the stationary blocks.
+    fn pose(&self, group: usize) -> Option<&SectionPose> {
+        group.checked_sub(1).and_then(|at| self.poses.get(at))
+    }
+
+    /// Blocks and their culling group, in the original order; group 0 is stationary.
+    fn iter(&self) -> impl Iterator<Item = (&SceneBlock<'b>, usize, Option<&SectionPose>)> {
+        let mut sections = self.poses.iter().enumerate().peekable();
+        self.cells.iter().enumerate().map(move |(index, block)| {
+            if sections
+                .peek()
+                .is_some_and(|(_, pose)| pose.range.end <= index)
+            {
+                sections.next();
+            }
+            match sections.peek() {
+                Some((group, pose)) if pose.range.contains(&index) => {
+                    (block, group + 1, Some(*pose))
+                }
+                _ => (block, 0, None),
+            }
+        })
+    }
+}
+
+/// A scene quad projected into GUI coordinates, with atlas UVs and ABGR colour.
 struct ProjectedQuad {
     depth: f32,
     corners: [[f32; 3]; 4],
     uv: [[f32; 2]; 4],
     colors: [u32; 4],
+}
+
+impl ProjectedQuad {
+    fn new(m: Mat4, corners: [Vec3; 4], uv: [[f32; 2]; 4], colors: [u32; 4]) -> Self {
+        let pos = corners.map(|c| m.transform_point3(c));
+        Self {
+            depth: pos.iter().map(|v| v.z).sum::<f32>() / 4.0,
+            corners: pos.map(|v| v.to_array()),
+            uv,
+            colors,
+        }
+    }
+
+    fn finite(&self) -> bool {
+        self.depth.is_finite() && self.corners.iter().flatten().all(|v| v.is_finite())
+    }
+}
+
+/// An overlay projected into GUI coordinates, with its ABGR colour.
+struct ProjectedOverlay {
+    corners: [[f32; 3]; 4],
+    color: u32,
+    depth: OverlayDepth,
+}
+
+/// The view for one draw, with any textured faces and overlays already resolved
+/// and projected.
+pub(super) struct SceneFrame {
+    pub(super) rect: [f32; 4],
+    pub(super) view: SceneView,
+    pub(super) look: SceneLook,
+    matrix: Mat4,
+    projected: Vec<ProjectedQuad>,
+    overlays: Vec<ProjectedOverlay>,
+}
+
+impl SceneFrame {
+    pub(super) fn new(rect: [f32; 4], view: SceneView) -> Self {
+        Self {
+            rect,
+            view,
+            look: SceneLook::default(),
+            matrix: scene_matrix(rect, view),
+            projected: Vec::new(),
+            overlays: Vec::new(),
+        }
+    }
+
+    /// The same frame with `parts`' faces, overlays and look, all checked.
+    pub(super) fn with_parts(
+        mut self,
+        atlas: &HudAtlas,
+        look: SceneLook,
+        parts: &SceneParts,
+    ) -> Result<Self, ScenePartsError> {
+        self.look = look;
+        let faces = parts.faces.iter().map(
+            |SceneFace {
+                 quad, corner_tints, ..
+             }| { (quad, corner_tints.unwrap_or([quad.tint; 4])) },
+        );
+        Ok(self
+            .with_faces(atlas, faces)?
+            .with_overlays(&parts.overlays)?)
+    }
+
+    /// Project the entire overlay list before a living scene advances or any
+    /// geometry is emitted.
+    pub(super) fn with_overlays(
+        mut self,
+        overlays: &[SceneOverlay],
+    ) -> Result<Self, SceneOverlayError> {
+        if !self.view.scale.is_finite() || self.view.scale <= 0.0 {
+            return Err(SceneError::BadView.into());
+        }
+        if overlays.len() > SCENE_MAX_OVERLAYS {
+            return Err(SceneOverlayError::TooManyOverlays);
+        }
+        let m = self.matrix;
+        self.overlays.reserve_exact(overlays.len());
+        let point = |p| m.transform_point3(Vec3::from_array(p));
+        for (index, overlay) in (0u32..).zip(overlays) {
+            let bad = SceneOverlayError::BadOverlay { index };
+            let (corners, argb, depth) = match *overlay {
+                SceneOverlay::Line {
+                    from,
+                    to,
+                    width,
+                    argb,
+                    depth,
+                } => {
+                    let (from, to) = (point(from), point(to));
+                    if !from.is_finite() || !to.is_finite() || !width.is_finite() || width <= 0.0 {
+                        return Err(bad);
+                    }
+                    // The screen-space perpendicular expands each endpoint without changing
+                    // its depth. Use f64 for the direction so large finite deltas don't overflow.
+                    let delta = (to.as_dvec3() - from.as_dvec3()).truncate();
+                    let length = delta.length();
+                    if length == 0.0 {
+                        continue;
+                    }
+                    let offset = (delta.perp() * (f64::from(width) * 0.5 / length))
+                        .as_vec2()
+                        .extend(0.0);
+                    (
+                        [from + offset, from - offset, to - offset, to + offset],
+                        argb,
+                        depth,
+                    )
+                }
+                SceneOverlay::Quad {
+                    corners,
+                    argb,
+                    depth,
+                } => (corners.map(point), argb, depth),
+                _ => return Err(bad),
+            };
+            if !corners.iter().all(|p| p.is_finite()) {
+                return Err(bad);
+            }
+            self.overlays.push(ProjectedOverlay {
+                corners: corners.map(|p| p.to_array()),
+                color: abgr(argb),
+                depth: match depth {
+                    SceneDepth::Tested => OverlayDepth::Tested,
+                    SceneDepth::ThroughWalls => OverlayDepth::ThroughWalls,
+                    _ => return Err(bad),
+                },
+            });
+        }
+        Ok(self)
+    }
+
+    /// Resolve and validate the caller's faces before any draw or live scene work.
+    pub(super) fn with_textured_quads(
+        self,
+        atlas: &HudAtlas,
+        quads: &[SceneTexturedQuad],
+    ) -> Result<Self, SceneWithQuadsError> {
+        self.with_faces(atlas, quads.iter().map(|q| (q, [q.tint; 4])))
+    }
+
+    /// The same for faces with a tint per corner.
+    fn with_faces<'a>(
+        mut self,
+        atlas: &HudAtlas,
+        quads: impl ExactSizeIterator<Item = (&'a SceneTexturedQuad, [u32; 4])>,
+    ) -> Result<Self, SceneWithQuadsError> {
+        if quads.len() > SCENE_MAX_TEXTURED_QUADS {
+            return Err(SceneWithQuadsError::TooManyTexturedQuads);
+        }
+        if !self.view.scale.is_finite()
+            || self.view.scale <= 0.0
+            || !self.matrix.is_finite()
+            || !self.rect.iter().all(|v| v.is_finite())
+        {
+            return Err(SceneWithQuadsError::Scene(SceneError::BadView));
+        }
+        self.projected.reserve_exact(quads.len());
+        for (index, (q, tints)) in (0u32..).zip(quads) {
+            if !q.corners.iter().flatten().all(|v| v.abs() <= 30_000_000.0)
+                || !q.uv.iter().flatten().all(|v| (0.0..=1.0).contains(v))
+            {
+                return Err(SceneWithQuadsError::BadTexturedQuad { index });
+            }
+            // The atlas packs Minecraft textures by their path and other namespaces verbatim.
+            let name = q.sprite.strip_prefix("minecraft:").unwrap_or(&q.sprite);
+            let sprite = atlas
+                .sprites
+                .get(name)
+                .ok_or(SceneWithQuadsError::UnknownSprite { index })?;
+            let uv = q.uv.map(|[u, v]| {
+                [
+                    sprite.u0 + u * (sprite.u1 - sprite.u0),
+                    sprite.v0 + v * (sprite.v1 - sprite.v0),
+                ]
+            });
+            let quad = ProjectedQuad::new(
+                self.matrix,
+                q.corners.map(Vec3::from_array),
+                uv,
+                tints.map(abgr),
+            );
+            if !quad.finite() {
+                return Err(SceneWithQuadsError::Scene(SceneError::BadView));
+            }
+            self.projected.push(quad);
+        }
+        Ok(self)
+    }
 }
 
 /// How a quad's colour is shaded when it is seen.
@@ -114,28 +401,13 @@ pub(super) enum Shade {
 pub(super) struct SceneQuad {
     pub(super) corners: [Vec3; 4],
     pub(super) uv: [[f32; 2]; 4],
-    /// ABGR, one per corner.
-    pub(super) colors: [u32; 4],
+    pub(super) color: u32,
     pub(super) normal: Vec3,
     /// Dropped when it faces away: block model faces, and the quads a block
     /// entity marks for culling as `entity.wgsl` does (`CULL_BACK`,
     /// `SHADED_CULL_W`). Other quads draw both sides, as in the world.
     pub(super) cull: bool,
     pub(super) shade: Shade,
-}
-
-impl SceneQuad {
-    /// A quad of one colour whose shading is already in it.
-    pub(super) fn baked(corners: [Vec3; 4], uv: [[f32; 2]; 4], color: u32, normal: Vec3, cull: bool) -> Self {
-        Self {
-            corners,
-            uv,
-            colors: [color; 4],
-            normal,
-            cull,
-            shade: Shade::Baked,
-        }
-    }
 }
 
 /// The GUI transform of `view` in the box `rect` (x0, y0, x1, y1): the view's
@@ -203,6 +475,18 @@ fn crack_uv(position: [f32; 3], facing: [i32; 3]) -> [f32; 2] {
     }
 }
 
+/// The normal a drawn quad faces along: its corners', else the one it was submitted with.
+fn quad_normal(corners: [Vec3; 4], submitted: [i8; 4]) -> Vec3 {
+    let normal = (corners[1] - corners[0])
+        .cross(corners[2] - corners[0])
+        .normalize_or_zero();
+    if normal != Vec3::ZERO {
+        return normal;
+    }
+    let [nx, ny, nz, _] = submitted;
+    Vec3::new(f32::from(nx), f32::from(ny), f32::from(nz)).normalize_or_zero()
+}
+
 impl Game<'_> {
     /// A small level of `blocks` with the game block entities their saved data gives (a
     /// block with no data gets none): what the game's block entity renderers read in a scene,
@@ -240,7 +524,9 @@ impl Game<'_> {
             if let Some((_, entity)) =
                 horizon_client::save::decode_block_entity_for_block(&Tag::Compound(tag), name)
             {
-                world.block_entities.insert((b.pos[0], b.pos[1], b.pos[2]), entity);
+                world
+                    .block_entities
+                    .insert((b.pos[0], b.pos[1], b.pos[2]), entity);
             }
         }
         world
@@ -251,7 +537,7 @@ impl Game<'_> {
     /// times its level. Full bright is white, so a scene that never sets a light draws as
     /// it did. Without a renderer (a test) it is the lightmap's grey curve.
     fn scene_light(&self, light: u32) -> u32 {
-        if light == mod_api::SCENE_FULL_BRIGHT {
+        if light == SCENE_FULL_BRIGHT {
             return 0xFFFF_FFFF;
         }
         let sky = ((light & 0xFF) >> 4).min(15) as usize;
@@ -266,91 +552,239 @@ impl Game<'_> {
         horizon_client::hud::rgba(v, v, v, 255)
     }
 
+    /// The fluid surfaces of culling group `group`'s blocks, meshed as the world meshes them
+    /// against that group's own blocks (air elsewhere), before its pose and light.
+    fn scene_group_fluids(
+        &self,
+        blocks: &SceneBlocks<'_, '_>,
+        group: usize,
+        look: SceneLook,
+        state_at: &dyn Fn([i32; 3]) -> u32,
+        quads: &mut Vec<SceneQuad>,
+    ) {
+        let cells: Vec<[i32; 3]> = blocks
+            .iter()
+            .filter(|(_, g, _)| *g == group)
+            .map(|(block, ..)| block.pos)
+            .collect();
+        let water = look.biome.map_or(DEFAULT_WATER, |id| {
+            self.res.biomes().get(id).water & 0xFF_FFFF
+        });
+        let fluid = horizon_client::mesher::scene_fluids(
+            &self.pack.context.tables,
+            &self.pack.context.part_tables,
+            &cells,
+            state_at,
+            water,
+        );
+        for q in fluid.as_chunks::<4>().0 {
+            let layer = u32::from(q[0].layer & !horizon_client::mesher::OPAQUE_LAYER);
+            let Some(sprite) = self
+                .pack
+                .layer_names
+                .get(&layer)
+                .and_then(|name| self.gui.atlas.sprites.get(name))
+            else {
+                continue;
+            };
+            let corners = q.each_ref().map(|v| Vec3::from_array(v.pos));
+            quads.push(SceneQuad {
+                corners,
+                uv: q.each_ref().map(|v| {
+                    let [u, w] = v.uv();
+                    [
+                        sprite.u0 + u * (sprite.u1 - sprite.u0),
+                        sprite.v0 + w * (sprite.v1 - sprite.v0),
+                    ]
+                }),
+                color: q[0].color,
+                normal: quad_normal(corners, [0; 4]),
+                cull: true,
+                shade: Shade::Normal,
+            });
+        }
+    }
+
+    /// The game's own block entities of culling group `group` (chests, signs, banners…),
+    /// drawn by their renderers as in the world, full bright, against a small level of the
+    /// group's blocks with the saved data each gives, before its pose and light. Nothing
+    /// ticks. A mod's block entity keeps its own path.
+    fn scene_group_entities(
+        &self,
+        batch: &mut HudBatch,
+        blocks: &SceneBlocks<'_, '_>,
+        group: usize,
+        quads: &mut Vec<SceneQuad>,
+    ) {
+        let renderer = self.res.block_entity_render();
+        let members = || {
+            blocks
+                .iter()
+                .filter(|(_, g, _)| *g == group)
+                .map(|(block, ..)| block)
+        };
+        let drawn = || members().filter(|b| b.entity.is_none() && renderer.renders(b.state.0));
+        if drawn().next().is_none() {
+            return;
+        }
+        let world = self.scene_entity_level(members());
+        let sign = |p: [i32; 3]| match world.block_entities.get(&(p[0], p[1], p[2])) {
+            Some(BlockEntity::Sign(sign)) => Some(sign),
+            _ => None,
+        };
+        let banner = |p: [i32; 3], visit: &mut dyn FnMut(&str, u32)| {
+            if let Some(BlockEntity::Banner(b)) = world.block_entities.get(&(p[0], p[1], p[2])) {
+                let banners = &self.stations().banners;
+                for layer in b.layers.iter().take(16) {
+                    visit(
+                        &banners.layer_texture_cow(layer),
+                        horizon_client::banner::dye_rgb(&layer.color),
+                    );
+                }
+            }
+        };
+        let scene = horizon_client::block_entity_render::Scene {
+            camera: glam::DVec3::ZERO,
+            spyglass_outline: false,
+            orientation: Quat::IDENTITY,
+            anim: &|_, _| horizon_client::block_entity_render::BlockAnim::default(),
+            texts: None,
+            partial: self.clock.fraction() as f32,
+            game_time: self.world.game_time,
+            max_y: world.shape.max_y() - 1,
+            world: &world,
+            sprites: &self.gui.atlas.sprites,
+            emissive: &self.gui.atlas.emissive,
+            translucent_sprites: &self.gui.atlas.translucent,
+            atlas_revision: self.gui.atlas.revision,
+            nether: false,
+            lid: &|_: [i32; 3]| 0.0,
+            sign: &sign,
+            sign_revision: None,
+            banner: &banner,
+            skull: &|_| None,
+            glyph: &|c| self.gui.atlas.glyph_cell(c),
+            glyphs: self.gui.atlas.font.epoch(),
+            font: Some(&self.gui.atlas.font),
+            dynamic_visible: None,
+        };
+        let mut placed: Vec<Vertex> = Vec::new();
+        for block in drawn() {
+            placed.clear();
+            let at = Vec3::from_array(block.pos.map(|v| v as f32));
+            renderer.render_block(
+                &scene,
+                block.pos,
+                block.state.0,
+                Mat4::from_translation(at),
+                0xFF,
+                &mut placed,
+            );
+            // Sign text's new glyphs upload with this screen's batch.
+            batch.patches.append(&mut self.text_patches.borrow_mut());
+            for q in placed.as_chunks::<4>().0 {
+                let corners = q.each_ref().map(|v| Vec3::from_array(v.pos));
+                // `entity.wgsl`: |w| >= 0.5 is shaded by the normal; smaller keeps the
+                // colour baked in.
+                let unbaked = q[0].normal[3].unsigned_abs() >= 64;
+                quads.push(SceneQuad {
+                    corners,
+                    uv: q.each_ref().map(|v| v.uv),
+                    color: q[0].color,
+                    normal: quad_normal(corners, q[0].normal),
+                    cull: horizon_client::mesher::culls_back(q[0].normal),
+                    shade: if unbaked { Shade::Normal } else { Shade::Baked },
+                });
+            }
+        }
+    }
+
     /// Draws `blocks`, a scene of block states at positions of its own (not
     /// the world's), into the box `rect` (x0, y0, x1, y1, GUI pixels) of a
     /// screen's `batch`, seen as `view` says: Create's Ponder scenes. Each
-    /// block is drawn with its model, shaded as `look.shading` says and tinted by
-    /// `look.biome`, a face against a solid neighbour in its own section left out;
-    /// a block with an `entity` (a mod's) is drawn by `native_block_entity_submit` as in
-    /// the world too, its `spin` parts turning with the game time. Every block, block
-    /// entity and scene quad goes through its section's transform and light, and an
-    /// undrawn section is left out; all sections share the call's one depth, so they hide
-    /// each other where they cross. A block with `breaking` gets its destroy stage drawn
-    /// over its model. What lies outside the box is cut off, and the scene has a depth of
-    /// its own, so it never covers the screen's other drawing or is covered by it but in
+    /// block is drawn with its model, full bright and shaded by face, a face
+    /// against a solid neighbour in the scene left out; a block with an
+    /// `entity` (a mod's) is drawn by `native_block_entity_submit` as in the
+    /// world too. Its animation follows the scene clock for a kept ticking copy,
+    /// and otherwise the client clock. `frame.look` and each section's light and drawn
+    /// flag change that as `SceneParts` says. What lies outside the box is cut off, and
+    /// the scene has a depth of its own, so
+    /// it never covers the screen's other drawing or is covered by it but in
     /// the order drawn. `extra` adds quads in the scene's coordinates before
     /// the scene is seen and sorted (a living scene's entities and particles,
-    /// `native_scene_live`); a scene of blocks alone passes none. Nothing is
-    /// drawn when a quad seen through the view isn't finite. API 422.
+    /// `native_scene_live`). Nothing is drawn when a quad seen through the
+    /// view isn't finite. API 422.
     pub(super) fn draw_scene_quads(
         &self,
         batch: &mut HudBatch,
-        rect: [f32; 4],
-        blocks: &[SceneBlock<'_>],
-        look: &SceneLook<'_>,
-        view: SceneView,
+        blocks: &SceneBlocks<'_, '_>,
+        frame: SceneFrame,
+        animation: Option<(u64, f32, &[LiveBlockEntity])>,
         extra: impl FnOnce(&mut Vec<SceneQuad>),
     ) -> Result<(), mod_api::SceneError> {
+        let SceneFrame {
+            rect,
+            view,
+            look,
+            matrix: m,
+            projected: mut seen,
+            overlays,
+        } = frame;
         if !self.native_window() {
             return Err(mod_api::SceneError::Unavailable);
         }
         if !view.scale.is_finite() || view.scale <= 0.0 {
             return Err(mod_api::SceneError::BadView);
         }
-        // Each section's transform, normal matrix and light; one section in place when the
-        // scene has none.
-        let sectioned = !look.sections.is_empty();
-        let frames: Vec<(Mat4, Mat3, u32, bool)> = if sectioned {
-            look.sections
-                .iter()
-                .map(|s| {
-                    let m = section_matrix(s).unwrap_or(Mat4::IDENTITY);
-                    let normals = Mat3::from_mat4(m).inverse().transpose();
-                    (m, normals, self.scene_light(s.light), s.drawn)
-                })
-                .collect()
-        } else {
-            vec![(Mat4::IDENTITY, Mat3::IDENTITY, 0xFFFF_FFFF, true)]
-        };
-        // The Game boundary prepared every state before any drawing began. Faces are
-        // culled against solid neighbours in their own section only, as Ponder masks its
-        // level to the section it draws.
-        let occupied: std::collections::HashMap<(usize, [i32; 3]), _> = blocks
+        // The Game boundary prepared every state before any drawing began.
+        let occupied: std::collections::HashMap<_, _> = blocks
             .iter()
-            .map(|b| ((if sectioned { b.section } else { 0 }, b.pos), b.state))
+            .map(|(block, group, _)| ((group, block.pos), block.state))
             .collect();
-        let solid = |section: usize, pos: [i32; 3]| {
-            occupied.get(&(section, pos)).is_some_and(|&state| {
+        let solid = |group, pos| {
+            occupied.get(&(group, pos)).is_some_and(|&state| {
                 self.res.behaviours().facts(state).flags & state_flags::SOLID_RENDER != 0
             })
         };
         let grass = self.pack.item_renderer.grass_color(0.5, 1.0) as u32;
         let tables = &self.pack.context.tables;
-        let biome_tint = |state, index| -> Option<u32> {
+        let tint = |state, index| -> Option<u32> {
+            use mod_api::client::mesher::TintSource;
             let Some(id) = look.biome else {
                 return tables.default_tint(state, index, grass);
             };
             let biomes = self.res.biomes();
             let info = biomes.get(id);
-            Some(match tables.tint_source(state, index)? {
-                mod_api::client::mesher::TintSource::Grass => biomes.grass(id, 0.0, 0.0),
-                mod_api::client::mesher::TintSource::Foliage => info.foliage,
-                mod_api::client::mesher::TintSource::DryFoliage => info.dry_foliage,
-                mod_api::client::mesher::TintSource::Water => info.water,
-                mod_api::client::mesher::TintSource::Fixed(c) => c,
-                _ => return tables.default_tint(state, index, grass),
-            } & 0xFF_FFFF)
+            Some(
+                match tables.tint_source(state, index)? {
+                    TintSource::Grass => biomes.grass(id, 0.0, 0.0),
+                    TintSource::Foliage => info.foliage,
+                    TintSource::DryFoliage => info.dry_foliage,
+                    TintSource::Water => info.water,
+                    TintSource::Fixed(c) => c,
+                    _ => return tables.default_tint(state, index, grass),
+                } & 0xFF_FFFF,
+            )
         };
+        let in_view_shading = matches!(look.shading, SceneShading::View { .. });
         let mut quads = Vec::new();
-        for block in blocks {
-            let section = if sectioned { block.section } else { 0 };
-            let Some(&(frame, normals, light, drawn)) = frames.get(section) else {
-                continue;
+        let (tick, partial, kept) = animation.unwrap_or((0, 0.0, &[]));
+        let mut kept = kept.iter().peekable();
+        for (i, (block, group, pose)) in blocks.iter().enumerate() {
+            let transform = pose.map(|pose| &pose.transform);
+            let ticking = if kept.peek().is_some_and(|entry| entry.index == i) {
+                kept.next().and_then(|entry| entry.ticking.as_ref())
+            } else {
+                None
             };
-            if !drawn {
+            if pose.is_some_and(|pose| !pose.drawn) {
                 continue;
             }
+            let packed = pose.map_or(SCENE_FULL_BRIGHT, |pose| pose.light);
             let start = quads.len();
+            let point = |pos| transform.map_or(pos, |pose| pose.transform_point3(pos));
+            let direction =
+                |normal| transform.map_or(normal, |pose| pose.transform_vector3(normal));
             let at = Vec3::new(
                 block.pos[0] as f32,
                 block.pos[1] as f32,
@@ -376,7 +810,10 @@ impl Game<'_> {
             for face in models.iter().flat_map(|(_, model)| &model.faces) {
                 if let Some(cull) = face.quad.cull {
                     let [dx, dy, dz] = step(cull);
-                    if solid(section, [block.pos[0] + dx, block.pos[1] + dy, block.pos[2] + dz]) {
+                    if solid(
+                        group,
+                        [block.pos[0] + dx, block.pos[1] + dy, block.pos[2] + dz],
+                    ) {
                         continue;
                     }
                 }
@@ -389,27 +826,23 @@ impl Game<'_> {
                     continue;
                 };
                 let facing = step(face.quad.facing);
-                let normal = Vec3::new(facing[0] as f32, facing[1] as f32, facing[2] as f32);
-                // Face shading is baked here, before the tint, as scenes always drew it; it
-                // takes the normal its section turns the face to. View shading waits for
-                // the view.
-                let (mut color, shade) = match look.shading {
-                    mod_api::SceneShading::View { .. } if face.quad.shade => {
-                        (0xFFFF_FFFF, Shade::Normal)
-                    }
-                    mod_api::SceneShading::View { .. } => (0xFFFF_FFFF, Shade::Unshaded),
-                    _ => {
-                        let turned = (normals * normal).normalize_or_zero();
-                        (shaded(0xFFFF_FFFF, face_shade(turned)), Shade::Baked)
-                    }
+                let normal = direction(Vec3::from_array(facing.map(|v| v as f32)));
+                // Face shading is baked here, before the tint, as scenes always drew it. View
+                // shading waits for the view.
+                let (mut color, shade) = if !in_view_shading {
+                    (shaded(0xFFFF_FFFF, face_shade(normal)), Shade::Baked)
+                } else if face.quad.shade {
+                    (0xFFFF_FFFF, Shade::Normal)
+                } else {
+                    (0xFFFF_FFFF, Shade::Unshaded)
                 };
-                if let Some(t) = biome_tint(block.state, face.quad.tint_index) {
+                if let Some(t) = tint(block.state, face.quad.tint_index) {
                     color = horizon_client::hud_layout::multiply(
                         color,
                         horizon_client::mobs::render::abgr(t),
                     );
                 }
-                let corners = face.quad.positions.map(|p| at + Vec3::from_array(p));
+                let corners = face.quad.positions.map(|p| point(at + Vec3::from_array(p)));
                 quads.push(SceneQuad {
                     corners,
                     uv: face.quad.uv.map(|uv| {
@@ -418,7 +851,7 @@ impl Game<'_> {
                             sprite.v0 + uv[1] * (sprite.v1 - sprite.v0),
                         ]
                     }),
-                    colors: [color; 4],
+                    color,
                     normal,
                     cull: true,
                     shade,
@@ -432,32 +865,45 @@ impl Game<'_> {
                             let [u, v] = crack_uv(p, facing);
                             [c.u0 + u * (c.u1 - c.u0), c.v0 + v * (c.v1 - c.v0)]
                         }),
-                        colors: [0xFFFF_FFFF; 4],
+                        color: 0xFFFF_FFFF,
                         normal,
                         cull: true,
                         shade: Shade::Baked,
                     });
                 }
             }
-            if let Some(entity) = &block.entity {
-                let entity =
-                    mod_api::ModBlockEntity::new(entity.id.to_string(), entity.fields.clone());
+            if let Some(seed) = block.entity {
+                let original;
+                let (entity, partial, game_time, animation_time) =
+                    if let Some((_, entity)) = ticking {
+                        (
+                            entity,
+                            partial,
+                            i64::try_from(tick).unwrap_or(i64::MAX),
+                            tick as f64 + f64::from(partial),
+                        )
+                    } else {
+                        original =
+                            mod_api::ModBlockEntity::new(seed.id.to_string(), seed.fields.clone());
+                        (
+                            &original,
+                            self.clock.fraction() as f32,
+                            self.world.game_time,
+                            self.animation_time(),
+                        )
+                    };
                 let name = &*self.res.facts().get(block.state).name;
                 let mut draw = BlockEntityDraw::posed(
-                    self.clock.fraction() as f32,
-                    self.world.game_time,
-                    if sectioned {
-                        look.sections[section].light
-                    } else {
-                        240 | 240 << 8
-                    },
+                    partial,
+                    game_time,
+                    packed,
                     block.pos,
                     Mat4::IDENTITY,
                     diffuse_lights(false),
                     Vec::new(),
                 )
-                .animated(self.animation_time());
-                self.native_block_entity_submit(block.pos, name, block.state, &entity, &mut draw);
+                .animated(animation_time);
+                self.native_block_entity_submit(block.pos, name, block.state, entity, &mut draw);
                 // Its text's new glyphs upload with this screen's batch.
                 batch.patches.append(&mut self.text_patches.borrow_mut());
                 let time = draw.animation();
@@ -466,271 +912,81 @@ impl Game<'_> {
                 place_turning(&drawn, &spins, time, at, &mut placed);
                 for q in placed.as_chunks::<4>().0 {
                     let corners = q.each_ref().map(|v| Vec3::from_array(v.pos));
-                    let [nx, ny, nz, w] = q[0].normal;
-                    let mut normal = (corners[1] - corners[0])
-                        .cross(corners[2] - corners[0])
-                        .normalize_or_zero();
-                    if normal == Vec3::ZERO {
-                        normal = Vec3::new(f32::from(nx), f32::from(ny), f32::from(nz))
-                            .normalize_or_zero();
-                    }
+                    let normal = direction(quad_normal(corners, q[0].normal));
                     // `entity.wgsl`: |w| >= 0.5 is shaded by the normal; smaller
                     // keeps the colour baked in (quads, cubes, items, text).
-                    let unbaked = w.unsigned_abs() >= 64;
+                    let unbaked = q[0].normal[3].unsigned_abs() >= 64;
                     quads.push(SceneQuad {
-                        corners,
+                        corners: corners.map(point),
                         uv: q.each_ref().map(|v| v.uv),
-                        colors: [q[0].color; 4],
+                        color: q[0].color,
                         normal,
                         cull: horizon_client::mesher::culls_back(q[0].normal),
                         shade: if unbaked { Shade::Normal } else { Shade::Baked },
                     });
                 }
             }
-            if sectioned {
+            if packed != SCENE_FULL_BRIGHT {
+                let light = self.scene_light(packed);
                 for q in &mut quads[start..] {
-                    q.corners = q.corners.map(|c| frame.transform_point3(c));
-                    q.normal = (normals * q.normal).normalize_or_zero();
-                    q.colors = q.colors.map(|c| lit(c, light));
+                    q.color = lit(q.color, light);
                 }
             }
         }
-        // Fluids: each drawn section's fluid cells meshed as the world meshes them, against
-        // that section's own blocks (air elsewhere), so heights, flow and hidden faces match.
         let air = self.res.facts().air.0;
-        let water = match look.biome {
-            Some(id) => self.res.biomes().get(id).water & 0xFF_FFFF,
-            None => DEFAULT_WATER,
-        };
-        for (section, &(frame, normals, light, drawn)) in frames.iter().enumerate() {
-            let cells: Vec<[i32; 3]> = blocks
-                .iter()
-                .filter(|b| !sectioned || b.section == section)
-                .map(|b| b.pos)
-                .collect();
-            if !drawn || cells.is_empty() {
+        for group in 0..=blocks.poses.len() {
+            let pose = blocks.pose(group);
+            if pose.is_some_and(|pose| !pose.drawn) {
                 continue;
             }
-            let state_at = |p: [i32; 3]| occupied.get(&(section, p)).map_or(air, |s| s.0);
-            let fluid = horizon_client::mesher::scene_fluids(
-                tables,
-                &self.pack.context.part_tables,
-                &cells,
-                &state_at,
-                water,
-            );
-            for q in fluid.as_chunks::<4>().0 {
-                let layer = u32::from(q[0].layer & !horizon_client::mesher::OPAQUE_LAYER);
-                let Some(sprite) = self
-                    .pack
-                    .layer_names
-                    .get(&layer)
-                    .and_then(|name| self.gui.atlas.sprites.get(name))
-                else {
-                    continue;
-                };
-                let corners = q.each_ref().map(|v| frame.transform_point3(Vec3::from_array(v.pos)));
-                let flat = q.each_ref().map(|v| Vec3::from_array(v.pos));
-                let normal = (flat[1] - flat[0]).cross(flat[2] - flat[0]).normalize_or_zero();
-                let color = q[0].color;
-                // Face shading is baked before the light, as for block faces.
-                let (color, shade) = match look.shading {
-                    mod_api::SceneShading::View { .. } => (color, Shade::Normal),
-                    _ => (
-                        shaded(color, face_shade((normals * normal).normalize_or_zero())),
-                        Shade::Baked,
-                    ),
-                };
-                quads.push(SceneQuad {
-                    corners,
-                    uv: q.each_ref().map(|v| {
-                        let [u, w] = v.uv();
-                        [
-                            sprite.u0 + u * (sprite.u1 - sprite.u0),
-                            sprite.v0 + w * (sprite.v1 - sprite.v0),
-                        ]
-                    }),
-                    colors: [lit(color, light); 4],
-                    normal: (normals * normal).normalize_or_zero(),
-                    cull: true,
-                    shade,
-                });
+            let start = quads.len();
+            if look.fluids {
+                let state_at = |p| occupied.get(&(group, p)).map_or(air, |s| s.0);
+                self.scene_group_fluids(blocks, group, look, &state_at, &mut quads);
             }
-        }
-        // The game's own block entities (chests, signs, banners…), drawn by their renderers as
-        // in the world, against a small level of their section's blocks holding the saved data
-        // each block gives, nothing ticking. A mod's block entity keeps its own path above.
-        let renderer = self.res.block_entity_render();
-        let game_entities = |section: usize| {
-            blocks.iter().filter(move |b| {
-                (!sectioned || b.section == section)
-                    && b.entity.is_none()
-                    && renderer.renders(b.state.0)
-            })
-        };
-        for (section, &(frame, normals, light, drawn)) in frames.iter().enumerate() {
-            if !drawn || game_entities(section).next().is_none() {
+            if look.game_block_entities {
+                self.scene_group_entities(batch, blocks, group, &mut quads);
+            }
+            let Some(pose) = pose else {
                 continue;
+            };
+            let light = self.scene_light(pose.light);
+            for q in &mut quads[start..] {
+                q.corners = q.corners.map(|c| pose.transform.transform_point3(c));
+                q.normal = pose.transform.transform_vector3(q.normal);
+                q.color = lit(q.color, light);
             }
-            let world = self.scene_entity_level(
-                blocks.iter().filter(|b| !sectioned || b.section == section),
-            );
-            let sign = |p: [i32; 3]| match world.block_entities.get(&(p[0], p[1], p[2])) {
-                Some(BlockEntity::Sign(sign)) => Some(sign),
-                _ => None,
-            };
-            let banner = |p: [i32; 3]| match world.block_entities.get(&(p[0], p[1], p[2])) {
-                Some(BlockEntity::Banner(b)) => {
-                    super::banners::layer_textures(&self.stations().banners, &b.layers)
-                }
-                _ => Vec::new(),
-            };
-            let scene = horizon_client::block_entity_render::Scene {
-                camera: glam::DVec3::ZERO,
-                spyglass_outline: false,
-                orientation: glam::Quat::IDENTITY,
-                anim: &|_| horizon_client::block_entity_render::BlockAnim::default(),
-                texts: None,
-                partial: self.clock.fraction() as f32,
-                game_time: self.world.game_time,
-                max_y: world.shape.max_y() - 1,
-                world: &world,
-                sprites: &self.gui.atlas.sprites,
-                emissive: &self.gui.atlas.emissive,
-                translucent_sprites: &self.gui.atlas.translucent,
-                atlas_revision: self.gui.atlas.revision,
-                nether: false,
-                lid: &|_: [i32; 3]| 0.0,
-                sign: &sign,
-                banner: &banner,
-                skull: &|_| None,
-                glyph: &|c| self.gui.atlas.glyph_cell(c),
-                glyphs: self.gui.atlas.font.epoch(),
-                font: Some(&self.gui.atlas.font),
-                dynamic_visible: None,
-            };
-            let mut placed: Vec<Vertex> = Vec::new();
-            for block in game_entities(section) {
-                placed.clear();
-                let at = Vec3::new(block.pos[0] as f32, block.pos[1] as f32, block.pos[2] as f32);
-                // Full bright: the section's light is applied below, as to its blocks.
-                renderer.render_block(
-                    &scene,
-                    block.pos,
-                    block.state.0,
-                    Mat4::from_translation(at),
-                    0xFF,
-                    &mut placed,
-                );
-                // Sign text's new glyphs upload with this screen's batch.
-                batch.patches.append(&mut self.text_patches.borrow_mut());
-                for q in placed.as_chunks::<4>().0 {
-                    let flat = q.each_ref().map(|v| Vec3::from_array(v.pos));
-                    let [nx, ny, nz, w] = q[0].normal;
-                    let mut normal = (flat[1] - flat[0]).cross(flat[2] - flat[0]).normalize_or_zero();
-                    if normal == Vec3::ZERO {
-                        normal = Vec3::new(f32::from(nx), f32::from(ny), f32::from(nz))
-                            .normalize_or_zero();
-                    }
-                    // `entity.wgsl`: |w| >= 0.5 is shaded by the normal; smaller keeps the
-                    // colour baked in.
-                    let unbaked = w.unsigned_abs() >= 64;
-                    quads.push(SceneQuad {
-                        corners: flat.map(|c| frame.transform_point3(c)),
-                        uv: q.each_ref().map(|v| v.uv),
-                        colors: [lit(q[0].color, light); 4],
-                        normal: (normals * normal).normalize_or_zero(),
-                        cull: horizon_client::mesher::culls_back(q[0].normal),
-                        shade: if unbaked { Shade::Normal } else { Shade::Baked },
-                    });
-                }
-            }
-        }
-        // The scene's own quads: outlines, shadows, flashes.
-        let white = self.gui.atlas.white_uv();
-        for (index, q) in (0u32..).zip(look.quads) {
-            let (frame, light) = match q.section {
-                Some(s) => {
-                    let (m, _, l, drawn) = frames[s as usize];
-                    if !drawn {
-                        continue;
-                    }
-                    (m, l)
-                }
-                None => (Mat4::IDENTITY, 0xFFFF_FFFF),
-            };
-            let uv = match &q.sprite {
-                Some(name) => {
-                    let r = self
-                        .gui
-                        .atlas
-                        .sprites
-                        .get(name.as_str())
-                        .ok_or(mod_api::SceneError::BadQuad { index })?;
-                    q.uv.map(|[u, v]| [r.u0 + u * (r.u1 - r.u0), r.v0 + v * (r.v1 - r.v0)])
-                }
-                None => [white; 4],
-            };
-            let corners = q.corners.map(|c| frame.transform_point3(Vec3::from_array(c)));
-            let normal = (corners[1] - corners[0])
-                .cross(corners[2] - corners[0])
-                .normalize_or_zero();
-            quads.push(SceneQuad {
-                corners,
-                uv,
-                colors: q
-                    .colors
-                    .map(|c| lit(horizon_client::hud_layout::abgr(c), light)),
-                normal,
-                cull: q.cull,
-                shade: if q.shade { Shade::Normal } else { Shade::Baked },
-            });
         }
         extra(&mut quads);
-        let m = scene_matrix(rect, view);
         // A normal in the view's frame: x right, y up (the GUI's y runs down), z toward the
         // viewer.
         let in_view = |n: Vec3| {
             let v = m.transform_vector3(n);
             Vec3::new(v.x, -v.y, v.z).normalize_or_zero()
         };
-        let shade_of = |q: &SceneQuad| -> Option<f32> {
-            match (q.shade, look.shading) {
-                (Shade::Baked, _) => None,
-                (_, mod_api::SceneShading::Faces) => Some(face_shade(q.normal)),
-                (Shade::Normal, mod_api::SceneShading::View { lights }) => {
-                    Some(view_shade(in_view(q.normal), lights))
-                }
-                (Shade::Unshaded, mod_api::SceneShading::View { lights }) => {
-                    Some(view_shade(Vec3::Y, lights))
-                }
-                (_, _) => Some(face_shade(q.normal)),
+        let shaded_color = |q: &SceneQuad| match (q.shade, look.shading) {
+            (Shade::Baked, _) => q.color,
+            (Shade::Normal, SceneShading::View { lights }) => {
+                shaded(q.color, view_shade(in_view(q.normal), lights))
             }
+            (Shade::Unshaded, SceneShading::View { lights }) => {
+                shaded(q.color, view_shade(Vec3::Y, lights))
+            }
+            _ => shaded(q.color, face_shade(q.normal)),
         };
-        let mut seen: Vec<ProjectedQuad> = quads
+        let projected = quads
             .into_iter()
             .filter(|q| !q.cull || m.transform_vector3(q.normal).z > 0.0)
-            .map(|q| {
-                let colors = match shade_of(&q) {
-                    Some(s) => q.colors.map(|c| shaded(c, s)),
-                    None => q.colors,
-                };
-                let p = q.corners.map(|c| m.transform_point3(c));
-                let depth = p.iter().map(|v| v.z).sum::<f32>() / 4.0;
-                ProjectedQuad {
-                    depth,
-                    corners: p.map(|v| v.to_array()),
-                    uv: q.uv,
-                    colors,
-                }
-            })
-            .collect();
-        // Mod-chosen views and positions may overflow: refuse before any vertex.
-        let finite = |q: &ProjectedQuad| {
-            q.depth.is_finite() && q.corners.iter().flatten().all(|v| v.is_finite())
-        };
-        if !seen.iter().all(finite) {
-            return Err(mod_api::SceneError::BadView);
+            .map(|q| ProjectedQuad::new(m, q.corners, q.uv, [shaded_color(&q); 4]));
+        let textured_count = seen.len();
+        if textured_count == 0 {
+            seen = projected.collect();
+        } else {
+            seen.extend(projected);
+        }
+        // Textured faces were checked before the live scene could advance.
+        if !seen[textured_count..].iter().all(ProjectedQuad::finite) {
+            return Err(SceneError::BadView);
         }
         // Far to near, for the faces that let others show through.
         seen.sort_by(|a, b| a.depth.total_cmp(&b.depth));
@@ -738,8 +994,35 @@ impl Game<'_> {
         for face in seen {
             batch.quad_3d_colors(face.corners, face.uv, face.colors);
         }
-        batch.depth_since(start, rect);
+        self.finish_scene(batch, start, rect, &overlays);
         Ok(())
+    }
+
+    /// Submits the scene's depth and clip, drawing `overlays` after its geometry
+    /// in the same isolated depth pass.
+    fn finish_scene(
+        &self,
+        batch: &mut HudBatch,
+        start: usize,
+        rect: [f32; 4],
+        overlays: &[ProjectedOverlay],
+    ) {
+        if overlays.is_empty() {
+            batch.depth_since(start, rect);
+            return;
+        }
+        let overlay_start = batch.vertices.len();
+        let uv = horizon_client::gfx::lightning::white_uv(&self.gui.atlas.font.white());
+        for overlay in overlays {
+            batch.quad_3d(overlay.corners, [uv; 4], overlay.color);
+        }
+        let runs = overlays
+            .chunk_by(|a, b| a.depth == b.depth)
+            .scan(overlay_start, |end, run| {
+                *end += run.len() * 6;
+                Some((*end, run[0].depth))
+            });
+        batch.depth_overlays_since(start, overlay_start, rect, runs);
     }
 }
 
@@ -805,70 +1088,63 @@ mod tests {
         // Both lights come from below: a face straight up gets the ambient 0.4 alone.
         assert!((view_shade(Vec3::Y, ponder) - 0.4).abs() < 1e-6);
         assert!((view_shade(Vec3::NEG_Z, ponder) - 0.4).abs() < 1e-6);
-        assert_eq!(view_shade(Vec3::NEG_Y, [[0.0, -1.0, 0.0]; 2]), 1.0, "capped at 1");
-    }
-
-    #[test]
-    fn a_section_transform_must_be_finite_and_affine() {
-        let moved = mod_api::SceneSection::new().transformed(
-            Mat4::from_translation(Vec3::new(0.0, 0.5, 0.0)).to_cols_array(),
-        );
         assert_eq!(
-            section_matrix(&moved).map(|m| m.transform_point3(Vec3::ZERO)),
-            Some(Vec3::new(0.0, 0.5, 0.0))
+            view_shade(Vec3::NEG_Y, [[0.0, -1.0, 0.0]; 2]),
+            1.0,
+            "capped at 1"
         );
-        let mut projective = Mat4::IDENTITY.to_cols_array();
-        projective[3] = 0.5;
-        assert_eq!(section_matrix(&moved.transformed(projective)), None);
-        let mut infinite = Mat4::IDENTITY.to_cols_array();
-        infinite[12] = f32::NAN;
-        assert_eq!(section_matrix(&moved.transformed(infinite)), None);
     }
 
     #[test]
-    fn the_look_is_checked_before_anything_is_drawn() {
-        use mod_api::{Scene, SceneError, SceneQuad, SceneSection};
+    fn a_look_names_a_biome_the_game_has() {
         let plains = |name: &str| (name == "minecraft:plains").then_some(1);
-        let quad = SceneQuad::new([[0.0; 3]; 4], 0xFF00_0000);
-        let scene = Scene::new(Vec::new())
-            .with_sections(vec![SceneSection::new(), SceneSection::new().lit(5, 5)])
-            .with_quads(vec![quad.clone().in_section(1)])
-            .with_biome(mod_api::Identifier::parse("minecraft:plains").unwrap());
-        let look = check_look(&scene, plains).unwrap();
-        assert_eq!((look.sections.len(), look.quads.len(), look.biome), (2, 1, Some(1)));
+        let named = |name| SceneParts::new().with_biome(mod_api::Identifier::parse(name).unwrap());
+        let look = SceneLook::of(&named("minecraft:plains"), plains).unwrap();
+        assert_eq!(look.biome, Some(1));
+        assert_eq!(
+            SceneLook::of(&named("minecraft:nowhere"), plains).err(),
+            Some(ScenePartsError::BadBiome)
+        );
+        assert_eq!(
+            SceneLook::of(&SceneParts::new(), plains).unwrap().biome,
+            None
+        );
+    }
 
-        let mut bad = Mat4::IDENTITY.to_cols_array();
-        bad[15] = 2.0;
-        let mut sections = scene.sections.clone();
-        sections[1] = SceneSection::new().transformed(bad);
-        let refused = scene.clone().with_sections(sections);
-        assert_eq!(
-            check_look(&refused, plains).err(),
-            Some(SceneError::BadSection { index: 1 })
-        );
-        let named = scene.clone().with_quads(vec![quad.clone().in_section(2)]);
-        assert_eq!(
-            check_look(&named, plains).err(),
-            Some(SceneError::BadSection { index: 2 })
-        );
-        let mut nan = quad.clone();
-        nan.corners[2][1] = f32::INFINITY;
-        let unfinite = scene.clone().with_quads(vec![quad.clone(), nan]);
-        assert_eq!(
-            check_look(&unfinite, plains).err(),
-            Some(SceneError::BadQuad { index: 1 })
-        );
-        let many = scene
-            .clone()
-            .with_quads(vec![quad; mod_api::SCENE_MAX_QUADS + 1]);
-        assert_eq!(check_look(&many, plains).err(), Some(SceneError::TooManyQuads));
-        let elsewhere = scene.with_biome(mod_api::Identifier::parse("minecraft:nowhere").unwrap());
-        assert_eq!(check_look(&elsewhere, plains).err(), Some(SceneError::BadBiome));
+    #[test]
+    fn block_parts_land_on_the_block_they_name() {
+        let cell = |x| SceneBlock {
+            pos: [x, 0, 0],
+            state: horizon_world::registry::BlockStateId(1),
+            entity: None,
+            breaking: None,
+            game_data: None,
+        };
+        let parts = SceneParts::new()
+            .with_breaking(vec![(1, 4), (0, 10)])
+            .with_game_block_entities(vec![(0, mod_api::Compound::new())]);
+        let mut cells = [cell(0), cell(1)];
+        apply_block_parts(&mut cells, &parts).unwrap();
+        assert_eq!(cells.each_ref().map(|c| c.breaking), [None, Some(4)]);
+        assert!(cells[0].game_data.is_some() && cells[1].game_data.is_none());
+        for parts in [
+            SceneParts::new().with_breaking(vec![(2, 0)]),
+            SceneParts::new().with_game_block_entities(vec![(2, mod_api::Compound::new())]),
+        ] {
+            assert_eq!(
+                apply_block_parts(&mut [cell(0), cell(1)], &parts),
+                Err(ScenePartsError::NoBlock { index: 2 })
+            );
+        }
     }
 
     #[test]
     fn light_and_cracks() {
-        assert_eq!(lit(0xFF80_4020, 0xFFFF_FFFF), 0xFF80_4020, "full bright changes nothing");
+        assert_eq!(
+            lit(0xFF80_4020, 0xFFFF_FFFF),
+            0xFF80_4020,
+            "full bright changes nothing"
+        );
         assert_eq!(lit(0xFF80_4020, 0x0080_8080), 0xFF40_2010);
         // A crack lies on a face as the decal does: top seen from above, x across, z down.
         assert_eq!(crack_uv([0.25, 1.0, 0.75], [0, 1, 0]), [0.25, 0.75]);

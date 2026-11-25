@@ -1,16 +1,20 @@
 # Living screen scenes (DrawContext::draw_scene) need the game's resources: a lit furnace, a cow, smoke.
 horizon-client game::native_scene_live_tests::a_fifth_animating_scene_draws_its_last_state_and_is_refused_by_name lib daily game-boot
 horizon-client game::native_scene_live_tests::a_furnaces_particles_replay_pause_step_and_start_over_from_the_last_twenty_ticks lib daily game-boot
-horizon-client game::native_scene_live_tests::a_quad_behind_a_block_is_further_than_the_block_and_breaking_overlays_each_face lib daily game-boot
+horizon-client game::native_scene_live_tests::a_guide_ticks_another_mods_block_entity_copy_and_draws_its_changed_fields lib daily game-boot
+horizon-client game::native_scene_live_tests::a_moved_group_faces_and_overlays_share_one_depth lib daily game-boot
 horizon-client game::native_scene_live_tests::a_scene_accepts_4096_blocks_and_refuses_4097_without_drawing_or_changing_state lib daily game-boot
 horizon-client game::native_scene_live_tests::a_scene_holds_at_most_512_live_particles_the_blocks_own_counted lib daily game-boot
-horizon-client game::native_scene_live_tests::a_scene_in_sections_keeps_its_particles_when_its_blocks_change lib daily game-boot
 horizon-client game::native_scene_live_tests::a_scene_of_blocks_alone_keeps_no_state_and_reads_no_clock lib daily game-boot
-horizon-client game::native_scene_live_tests::faces_are_culled_within_a_section_only lib daily game-boot
+horizon-client game::native_scene_live_tests::a_scene_that_keeps_its_particles_goes_on_when_its_inputs_change lib daily game-boot
+horizon-client game::native_scene_live_tests::breaking_lays_a_crack_over_every_face_drawn lib daily game-boot
+horizon-client game::native_scene_live_tests::default_parts_and_a_group_in_place_draw_exactly_as_draw_scene lib daily game-boot
 horizon-client game::native_scene_live_tests::game_block_entities_are_drawn_by_their_renderers_with_their_saved_data lib daily game-boot
-horizon-client game::native_scene_live_tests::one_identity_section_draws_exactly_as_no_sections lib daily game-boot
+horizon-client game::native_scene_live_tests::groups_move_hide_and_are_lit_in_one_depth lib daily game-boot
+horizon-client game::native_scene_live_tests::invalid_textured_faces_do_not_touch_the_batch_or_keep_or_advance_a_scene lib daily game-boot
+horizon-client game::native_scene_live_tests::particles_kept_outlive_the_frames_that_add_none lib daily game-boot
 horizon-client game::native_scene_live_tests::scene_entities_are_drawn_and_refused_as_draw_context_entity_refuses_them lib daily game-boot
-horizon-client game::native_scene_live_tests::sections_move_hide_and_are_lit_in_one_depth lib daily game-boot
+horizon-client game::native_scene_live_tests::textured_faces_use_the_real_atlas_and_share_the_scene_clip_and_depth lib daily game-boot
 horizon-client game::native_scene_live_tests::two_mods_scenes_of_the_same_id_keep_their_own_state lib daily game-boot
 horizon-client game::native_scene_live_tests::view_shading_and_a_biome_change_colours_only lib daily game-boot
-horizon-client game::native_scene_live_tests::water_is_meshed_against_its_own_section_and_tinted_by_the_biome lib daily game-boot
+horizon-client game::native_scene_live_tests::water_is_meshed_against_its_own_group_and_tinted_by_the_biome lib daily game-boot

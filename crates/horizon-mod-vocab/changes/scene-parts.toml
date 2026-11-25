@@ -1,0 +1,3 @@
+ids = ["method:DrawContext::draw_scene_parts", "type:SceneParts", "type:ScenePartsError", "type:SceneGroup", "type:SceneFace", "type:SceneShading"]
+why = "One call draws a scene's sections, textured faces and overlays in one depth, where each had a call and a depth of its own. Sections gain a light and a drawn flag (SceneGroup), faces a tint per corner (SceneFace), and a scene can choose view-fixed two-light shading, a biome for its tints, fluids from its block states, the game's own block entities from saved data, breaking overlays, and to keep its particles when its inputs change."
+migrate = "Additive. The existing draw_scene calls, Scene and their wire data are unchanged, and SceneParts::default() draws what draw_scene does."

@@ -7,12 +7,15 @@ use super::{
     native_scene::{SceneBlock, scene_matrix},
     native_scene_live::{LiveScenes, check, facing_viewer, lives, scene_key, ticks_to_run},
 };
+use crate::game::host::draw::GameDrawContext;
 use glam::Vec3;
+use horizon_client::hud::{Blend, HudBatch};
 use horizon_world::registry::BlockStateId;
 use mod_api::{
-    Compound, GuiEntity, SCENE_CATCH_UP, SCENE_MAX_ANIMATING, SCENE_MAX_ENTITIES,
-    SCENE_MAX_PARTICLES, Scene, SceneClock, SceneEntity, SceneError, SceneParticle, SceneSection,
-    SceneView,
+    Compound, DrawContext as _, GuiEntity, SCENE_CATCH_UP, SCENE_MAX_ANIMATING, SCENE_MAX_ENTITIES,
+    SCENE_MAX_PARTICLES, SCENE_MAX_TEXTURED_QUADS, Scene, SceneClock, SceneDepth, SceneEntity,
+    SceneError, SceneFace, SceneGroup, SceneOverlay, SceneParticle, SceneParts, ScenePartsError,
+    SceneSection, SceneShading, SceneTexturedQuad, SceneView, SceneWithQuadsError,
 };
 
 fn cow(pos: [f64; 3]) -> SceneEntity {
@@ -153,7 +156,6 @@ fn a_scene_starts_over_when_its_blocks_change() {
             pos: [0, 0, 0],
             state: BlockStateId(state),
             entity: None,
-            section: 0,
             breaking: None,
             game_data: None,
         }]
@@ -187,17 +189,223 @@ fn lit_furnace(game: &super::Game<'_>) -> mod_api::BlockState {
 
 /// Draws `scene` as `DrawContext::draw_scene` does: the result and the vertices drawn.
 fn draw(game: &super::Game<'_>, scene: &Scene, view: SceneView) -> (Result<(), SceneError>, usize) {
-    let mut batch = horizon_client::hud::HudBatch::scratch([320, 240]);
-    let result =
-        crate::game::api_values::aggregates::scene_blocks(&scene.blocks, scene.sections.len())
-            .and_then(|prepared| {
-                let biomes = game.res.biomes();
-                let look = super::native_scene::check_look(scene, |name| {
-                    biomes.contains(name).then(|| biomes.id(name))
-                })?;
-                game.native_draw_scene(&mut batch, RECT, &prepared, &look, scene, view)
-            });
+    let mut batch = HudBatch::scratch([320, 240]);
+    let result = GameDrawContext::new(game, &mut batch).draw_scene(RECT, scene, view);
     (result, batch.vertices.len())
+}
+
+#[test]
+#[ignore = "daily"]
+fn posed_scene_sections_move_independently_in_one_depth_pass() {
+    use crate::game::api_values::TryIntoApi as _;
+    use mod_api::{SceneSection, SceneSectionError};
+
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let stone = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:stone")
+            .unwrap()
+            .try_into_api()
+            .unwrap();
+        let scene = Scene::new(vec![
+            mod_api::SceneBlock::new([0, 0, 0], stone, None),
+            mod_api::SceneBlock::new([1, 0, 0], stone, None),
+        ]);
+        let view = SceneView::new([0.0; 3], 0.0, 0.0, 20.0);
+        let pose = SceneSection::new(1, 1, [0.25, 0.75, 0.0], [0.0, 90.0, 0.0], [0.0; 3]);
+        let mut batch = HudBatch::scratch([320, 240]);
+        let mut context = GameDrawContext::new(game, &mut batch);
+        let overlapping = SceneSection::new(0, 2, [0.0; 3], [0.0; 3], [0.0; 3]);
+        assert_eq!(
+            context.draw_scene_with_sections(RECT, &scene, view, &[overlapping, pose]),
+            Err(SceneSectionError::BadSection { index: 1 })
+        );
+        drop(context);
+        assert!(batch.vertices.is_empty());
+
+        GameDrawContext::new(game, &mut batch)
+            .draw_scene_with_sections(RECT, &scene, view, &[pose])
+            .unwrap();
+        let ends = |include: fn(f32) -> bool| {
+            batch
+                .vertices
+                .iter()
+                .filter(|v| include(v.pos[1]))
+                .map(|v| v.pos[0])
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), x| {
+                    (lo.min(x), hi.max(x))
+                })
+        };
+        // With the unturned camera, pixel x is 60 - 20 * scene x.
+        // The raised cube turns [1,2] of X into [0,1] of -Z and [0,1] of Z
+        // into [0,1] of X, then shifts right in scene axes by a quarter block.
+        for (got, want) in [
+            (ends(|y| y < 20.0), (35.0, 55.0)),
+            (ends(|y| y > 48.0), (40.0, 60.0)),
+        ] {
+            assert!(
+                (got.0 - want.0).abs() < 0.001 && (got.1 - want.1).abs() < 0.001,
+                "{got:?}"
+            );
+        }
+        assert_eq!(
+            batch.blends.len(),
+            1,
+            "both cubes test against the same depth buffer"
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn textured_faces_use_the_real_atlas_and_share_the_scene_clip_and_depth() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let scene = Scene::new(vec![mod_api::SceneBlock::new(
+            [0, 0, 0],
+            lit_furnace(game),
+            None,
+        )]);
+        let view = SceneView::new([0.5; 3], 0.0, 0.0, 20.0);
+        let corners = [
+            [0.0, 1.0, 2.0],
+            [1.0, 1.0, 2.0],
+            [1.0, 0.0, 2.0],
+            [0.0, 0.0, 2.0],
+        ];
+        let uv = [[0.25, 0.125], [0.75, 0.0], [1.0, 0.875], [0.0, 1.0]];
+        let quad = SceneTexturedQuad::new("minecraft:block/water_still", corners, uv, 0xA010_80FF);
+        let mut batch = HudBatch::scratch([320, 240]);
+        assert_eq!(
+            GameDrawContext::new(game, &mut batch).draw_scene_with_quads(
+                RECT,
+                &scene,
+                view,
+                &[quad]
+            ),
+            Ok(())
+        );
+        assert!(
+            batch.vertices.len() > 6,
+            "faces and block share the same run"
+        );
+        assert_eq!(
+            batch.blends,
+            vec![(
+                0..batch.vertices.len() as u32,
+                Blend::Depth([10, 10, 100, 80])
+            )]
+        );
+        let sprite = game.gui.atlas.sprites["block/water_still"];
+        let pos = [[70.0, 40.0], [50.0, 40.0], [50.0, 60.0], [70.0, 60.0]];
+        for (v, i) in batch.vertices[..6].iter().zip([0, 1, 2, 0, 2, 3]) {
+            assert_eq!(v.pos, pos[i]);
+            assert_eq!(v.color, 0xA0FF_8010);
+            assert_eq!(v.depth, 1.0, "the rear face is farthest");
+            let [u, w] = uv[i];
+            assert!((v.uv[0] - ((1.0 - u) * sprite.u0 + u * sprite.u1)).abs() < 1e-6);
+            assert!((v.uv[1] - ((1.0 - w) * sprite.v0 + w * sprite.v1)).abs() < 1e-6);
+        }
+        assert!(batch.vertices[6..].iter().all(|v| v.depth < 1.0));
+        assert_eq!(game.live_scenes.borrow().len(), 0);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn invalid_textured_faces_do_not_touch_the_batch_or_keep_or_advance_a_scene() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let scene = |id, tick| Scene::new(Vec::new()).with_clock(SceneClock::new(id, tick, 0.0));
+        let quad = SceneTexturedQuad::new(
+            "block/water_flow",
+            [
+                [0.0, 1.0, 0.0],
+                [1.0, 1.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            0xFFFF_FFFF,
+        );
+        assert_eq!(draw(game, &scene(4, 0), view()).0, Ok(()));
+        game.frames += 1;
+        let mut batch = HudBatch::scratch([320, 240]);
+        let mut bad_uv = quad.clone();
+        bad_uv.uv[3][1] = 1.01;
+        let mut bad_pos = quad.clone();
+        bad_pos.corners[2][0] = f32::NAN;
+        let mut bad_name = quad.clone();
+        bad_name.sprite = "guide:missing".into();
+        let check = |batch: &mut HudBatch, input: &[SceneTexturedQuad], error| {
+            assert_eq!(
+                GameDrawContext::new(game, batch).draw_scene_with_quads(
+                    RECT,
+                    &scene(4, 1),
+                    view(),
+                    input
+                ),
+                Err(error)
+            );
+            assert!(
+                batch.vertices.is_empty() && batch.blends.is_empty() && batch.patches.is_empty()
+            );
+            assert_eq!(game.scene_tick("", 4), Some(0));
+        };
+        check(
+            &mut batch,
+            &[quad.clone(), bad_uv],
+            SceneWithQuadsError::BadTexturedQuad { index: 1 },
+        );
+        check(
+            &mut batch,
+            &[quad.clone(), bad_pos],
+            SceneWithQuadsError::BadTexturedQuad { index: 1 },
+        );
+        check(
+            &mut batch,
+            &[quad.clone(), bad_name],
+            SceneWithQuadsError::UnknownSprite { index: 1 },
+        );
+        check(
+            &mut batch,
+            &vec![quad.clone(); SCENE_MAX_TEXTURED_QUADS + 1],
+            SceneWithQuadsError::TooManyTexturedQuads,
+        );
+        for id in 0..4 {
+            assert_eq!(draw(game, &scene(id, 0), view()).0, Ok(()), "scene {id}");
+        }
+        // Neither refusal spent a slot. Both kinds of budget fallback still draw the
+        // current frame's quads: with a cached scene (4) or without one (5).
+        for id in [4, 5] {
+            let before = batch.vertices.len();
+            assert_eq!(
+                GameDrawContext::new(game, &mut batch).draw_scene_with_quads(
+                    RECT,
+                    &scene(id, 1),
+                    view(),
+                    std::slice::from_ref(&quad),
+                ),
+                Err(SceneWithQuadsError::Scene(SceneError::TooManyScenes))
+            );
+            assert_eq!(batch.vertices.len(), before + 6);
+        }
+        assert_eq!(game.scene_tick("", 4), Some(0));
+        assert_eq!(game.scene_tick("", 5), None);
+        game.frames += 1;
+        let before = batch.vertices.len();
+        assert_eq!(
+            GameDrawContext::new(game, &mut batch).draw_scene_with_quads(
+                RECT,
+                &scene(4, 1),
+                view(),
+                &[quad]
+            ),
+            Ok(())
+        );
+        assert_eq!(batch.vertices.len(), before + 6);
+        assert_eq!(game.scene_tick("", 4), Some(1));
+    });
 }
 
 /// A lit furnace's scene `id` run from tick 0 to each of `ticks` in turn, one frame each.
@@ -452,6 +660,235 @@ fn two_mods_scenes_of_the_same_id_keep_their_own_state() {
     });
 }
 
+#[test]
+#[ignore = "daily"]
+fn a_guide_ticks_another_mods_block_entity_copy_and_draws_its_changed_fields() {
+    use crate::game::execution_role::ExecutionRole;
+    use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_role};
+    use horizon_client::{
+        chunk::Chunk,
+        containers::{BlockEntity, ModBlockEntity, ModBlockEntityFields},
+        hud::HudBatch,
+    };
+    use mod_api::{
+        BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
+        BlockEntitySceneTickEvent, BlockEntitySubmitEvent, BlockPart, BlocksEvent, ClientHost,
+        GuiLayerPostEvent, Hooks, Identifier, Registrar, RegistrationContext, SceneBlockEntity,
+        Tag,
+    };
+    use std::sync::{Arc, Mutex};
+
+    const BLOCK: &str = "scene_machine:casing";
+    const KIND: &str = "scene_machine:rotor";
+    const POS: [i32; 3] = [0, 64, 0];
+    static TICKS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+    static DRAW_TIME: Mutex<Option<(i64, f32, f64)>> = Mutex::new(None);
+
+    fn phase(nbt: &Compound) -> i32 {
+        let Some(Tag::Int(phase)) = nbt.get(&"phase".into()) else {
+            panic!("fixture fields have no phase");
+        };
+        *phase
+    }
+
+    struct Rotor;
+    #[mod_api::horizon_part]
+    impl BlockPart for Rotor {}
+    #[mod_api::horizon_part]
+    impl BlockEntityPart for Rotor {
+        fn block_entity_scene_tick(&self, event: &mut BlockEntitySceneTickEvent<'_>) {
+            assert_eq!(event.pos, POS);
+            TICKS.lock().unwrap().push(event.tick);
+            let next = phase(&event.fields.nbt) + 1;
+            event.fields.nbt.insert("phase".into(), Tag::Int(next));
+        }
+
+        fn block_entity_client_ticks(
+            &self,
+            _: &dyn ClientHost,
+            event: &mut BlockEntityClientTicksEvent<'_>,
+        ) {
+            event.ticks = true;
+        }
+
+        fn block_entity_client_tick(
+            &self,
+            _: &mut dyn ClientHost,
+            _: &mut BlockEntityClientTickEvent<'_>,
+        ) {
+            panic!("drawing a guide must never run a world ticker");
+        }
+
+        fn block_entity_submit(&self, _: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+            assert_eq!(event.entity.id(), KIND);
+            assert_eq!(event.pos, POS);
+            let draw = &mut *event.draw;
+            *DRAW_TIME.lock().unwrap() =
+                Some((draw.game_time(), draw.partial(), draw.animation_time()));
+            let x = 0.125 + phase(&event.entity.nbt) as f32 / 32.0;
+            assert!(draw.quad(
+                "block/stone",
+                [
+                    [x, 0.75, -0.25],
+                    [x, 0.25, -0.25],
+                    [x + 0.125, 0.25, -0.25],
+                    [x + 0.125, 0.75, -0.25],
+                ],
+                [0.0, 0.0, 16.0, 16.0],
+                0xFF_0000,
+            ));
+        }
+    }
+
+    struct Machine;
+    #[mod_api::__subscriptions]
+    impl Hooks for Machine {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            let kind = r.block_entity_type("rotor").blocks(&[BLOCK]).build();
+            r.block_entity_part(&kind, Rotor).unwrap();
+        }
+        fn blocks(&self, _: &RegistrationContext, event: &mut BlocksEvent<'_>) {
+            event
+                .blocks
+                .push(mod_api::Block::new(BLOCK, "minecraft:stone"));
+        }
+    }
+
+    struct Guide {
+        layer: &'static str,
+        scene: Arc<Mutex<Option<Scene>>>,
+    }
+    #[mod_api::__subscriptions]
+    impl Hooks for Guide {
+        fn gui_layer_post(&self, _: &dyn ClientHost, event: &mut GuiLayerPostEvent<'_>) {
+            if event.layer == self.layer {
+                event
+                    .draw
+                    .draw_scene(
+                        RECT,
+                        self.scene.lock().unwrap().as_ref().unwrap(),
+                        SceneView::new([0.5, 64.5, 0.5], 0.0, 0.0, 20.0),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    if run_fresh_cases(
+        "game::native_scene_live_tests::a_guide_ticks_another_mods_block_entity_copy_and_draws_its_changed_fields",
+        "HORIZON_SCENE_BLOCK_ENTITY_TICK_CHILD",
+        &["game"],
+    ) {
+        return;
+    }
+    let input = Arc::new(Mutex::new(None));
+    let guide = |id| {
+        mod_api::ModEntry::new(
+            id,
+            Box::new(Guide {
+                layer: id,
+                scene: Arc::clone(&input),
+            }),
+        )
+    };
+    let mods: mod_api::Mods = vec![
+        mod_api::ModEntry::new("scene_machine", Box::new(Machine)),
+        guide("scene_guide"),
+        guide("other_guide"),
+    ]
+    .into();
+    mod_platform::__private::install(mods.clone());
+    crate::game::api_values::install_parts(&mods).unwrap();
+    let base = std::path::PathBuf::from(std::env::var_os("HORIZON_TEST_RESOURCES").unwrap());
+    let root = crate::game::mods::content_root(&base, &Default::default())
+        .unwrap()
+        .prepared()
+        .to_path_buf();
+    with_game_role(root, ExecutionRole::Client, |game| {
+        use crate::game::api_values::TryIntoApi as _;
+
+        let state = game.pack.assets.registry.default_state(BLOCK).unwrap();
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        game.world.set(0, 64, 0, state).unwrap();
+        let mut nbt = Compound::new();
+        nbt.insert("phase".into(), Tag::Int(91));
+        let real = ModBlockEntity::new(
+            KIND.into(),
+            ModBlockEntityFields {
+                nbt,
+                ..Default::default()
+            },
+        );
+        let revision = real.revision();
+        game.world
+            .block_entities
+            .insert((0, 64, 0), BlockEntity::Mod(Box::new(real)));
+        game.world.game_time = 500;
+        let client_time = (
+            game.world.game_time,
+            game.clock.fraction() as f32,
+            game.animation_time(),
+        );
+        let scene = |phase| {
+            let mut block_entity =
+                SceneBlockEntity::new(Identifier::parse(KIND).unwrap(), Default::default());
+            block_entity
+                .fields
+                .nbt
+                .insert("phase".into(), Tag::Int(phase));
+            Scene::new(vec![mod_api::SceneBlock::new(
+                POS,
+                state.try_into_api().unwrap(),
+                Some(block_entity),
+            )])
+        };
+        let mut frame = |owner, scene, phase, time| {
+            *input.lock().unwrap() = Some(scene);
+            game.frames += 1;
+            let mut batch = HudBatch::scratch([320, 240]);
+            game.native_gui_layer_post(owner, &mut batch);
+            assert_eq!(DRAW_TIME.lock().unwrap().take().unwrap(), time);
+            // The six red vertices come from the type's real renderer, not the stone model.
+            let red = batch
+                .vertices
+                .iter()
+                .filter(|v| v.color & 0x00FF_FF00 == 0 && v.color & 0xFF != 0)
+                .collect::<Vec<_>>();
+            assert_eq!(red.len(), 6);
+            let x = 60.0 - (0.125 + phase as f32 / 32.0 - 0.5) * 20.0;
+            assert!((red[0].pos[0] - x).abs() < 0.001, "phase {phase} not drawn");
+        };
+        let at = |seed, tick| {
+            scene(seed).with_clock(SceneClock::new(1, tick, 0.25).animate_blocks(false))
+        };
+        let time = |tick| (tick, 0.25, tick as f64 + 0.25);
+        frame("scene_guide", scene(3), 3, client_time);
+        frame("scene_guide", at(3, 7), 3, time(7));
+        frame("scene_guide", at(3, 8), 4, time(8));
+        frame("scene_guide", at(3, 8), 4, time(8));
+        frame("other_guide", at(3, 8), 3, time(8));
+        frame("scene_guide", at(3, 11), 7, time(11));
+        assert_eq!(std::mem::take(&mut *TICKS.lock().unwrap()), [8, 9, 10, 11]);
+        frame("scene_guide", at(3, 100), 23, time(100));
+        assert_eq!(*TICKS.lock().unwrap(), (81..=100).collect::<Vec<_>>());
+        TICKS.lock().unwrap().clear();
+        frame("scene_guide", at(3, 9), 3, time(9));
+        frame("scene_guide", at(6, 10), 6, time(10));
+        frame("scene_guide", at(6, 11), 7, time(11));
+        assert_eq!(*TICKS.lock().unwrap(), [11]);
+
+        let Some(BlockEntity::Mod(real)) = game.world.block_entities.get(&(0, 64, 0)) else {
+            panic!("the scene changed the world's block entity");
+        };
+        assert_eq!(phase(&real.nbt), 91);
+        assert_eq!(real.revision(), revision);
+        assert_eq!(game.world.block(0, 64, 0), state);
+        assert_eq!(game.world.game_time, 500);
+    });
+}
+
 /// The game's default state of `name`, as the API names it.
 fn block(game: &super::Game<'_>, name: &str) -> mod_api::BlockState {
     use crate::game::api_values::TryIntoApi as _;
@@ -464,164 +901,84 @@ fn block(game: &super::Game<'_>, name: &str) -> mod_api::BlockState {
     state.try_into_api().expect("the state")
 }
 
-/// Draws `scene` as `DrawContext::draw_scene` does and returns the vertices drawn.
-fn drawn(game: &super::Game<'_>, scene: &Scene) -> Vec<horizon_client::hud::HudVertex> {
-    let mut batch = horizon_client::hud::HudBatch::scratch([320, 240]);
-    let prepared =
-        crate::game::api_values::aggregates::scene_blocks(&scene.blocks, scene.sections.len())
-            .unwrap();
-    let biomes = game.res.biomes();
-    let look = super::native_scene::check_look(scene, |name| {
-        biomes.contains(name).then(|| biomes.id(name))
-    })
-    .unwrap();
-    game.native_draw_scene(&mut batch, RECT, &prepared, &look, scene, view())
-        .unwrap();
+/// Draws `scene` with `parts` and returns the result and the batch.
+fn draw_parts(
+    game: &super::Game<'_>,
+    scene: &Scene,
+    parts: &SceneParts,
+) -> (Result<(), ScenePartsError>, HudBatch) {
+    let mut batch = HudBatch::scratch([320, 240]);
+    let result =
+        GameDrawContext::new(game, &mut batch).draw_scene_parts(RECT, scene, view(), parts);
+    (result, batch)
+}
+
+/// The vertices `scene` with `parts` draws.
+fn drawn(
+    game: &super::Game<'_>,
+    scene: &Scene,
+    parts: &SceneParts,
+) -> Vec<horizon_client::hud::HudVertex> {
+    let (result, batch) = draw_parts(game, scene, parts);
+    assert_eq!(result, Ok(()));
     batch.vertices
 }
 
-/// Two stone blocks side by side, the second in `section`.
-fn pair(game: &super::Game<'_>, section: u32) -> Vec<mod_api::SceneBlock> {
+/// Draws `scene` with `parts` at `tick`, a frame on.
+fn show_parts(game: &mut super::Game<'_>, scene: &Scene, parts: &SceneParts, tick: u64) {
+    let mut at = scene.clone();
+    at.clock.as_mut().unwrap().tick = tick;
+    game.frames += 1;
+    assert_eq!(draw_parts(game, &at, parts).0, Ok(()), "tick {tick}");
+}
+
+/// Two stone blocks side by side.
+fn pair(game: &super::Game<'_>) -> Scene {
     let stone = block(game, "minecraft:stone");
-    vec![
+    Scene::new(vec![
         mod_api::SceneBlock::new([0, 0, 0], stone, None),
-        mod_api::SceneBlock::new([1, 0, 0], stone, None).in_section(section),
-    ]
+        mod_api::SceneBlock::new([1, 0, 0], stone, None),
+    ])
 }
 
-fn moved(by: [f32; 3]) -> SceneSection {
-    SceneSection::new().transformed(glam::Mat4::from_translation(Vec3::from_array(by)).to_cols_array())
+/// Block `first` and the `count` from it, moved by `by`.
+fn group(first: u32, count: u32, by: [f32; 3]) -> SceneGroup {
+    SceneGroup::new(SceneSection::new(first, count, by, [0.0; 3], [0.0; 3]))
 }
 
-#[test]
-#[ignore = "daily"]
-fn one_identity_section_draws_exactly_as_no_sections() {
-    crate::game::native_entity_refs::tests::with_client_game(|game| {
-        let plain = Scene::new(pair(game, 0));
-        let one = plain.clone().with_sections(vec![SceneSection::new()]);
-        let (a, b) = (drawn(game, &plain), drawn(game, &one));
-        assert!(!a.is_empty());
-        assert_eq!(
-            bytemuck::cast_slice::<_, u8>(&a),
-            bytemuck::cast_slice::<_, u8>(&b)
-        );
-    });
+fn grouped(groups: &[SceneGroup]) -> SceneParts {
+    SceneParts::new().with_groups(groups.to_vec())
 }
 
-#[test]
-#[ignore = "daily"]
-fn faces_are_culled_within_a_section_only() {
-    crate::game::native_entity_refs::tests::with_client_game(|game| {
-        let sections = vec![SceneSection::new(), SceneSection::new()];
-        let together = Scene::new(pair(game, 0)).with_sections(sections.clone());
-        let apart = Scene::new(pair(game, 1)).with_sections(sections);
-        // The faces the two blocks share are drawn once they are in different sections:
-        // the second's west face is seen from this view, the first's east face is not.
-        assert_eq!(drawn(game, &apart).len(), drawn(game, &together).len() + 6);
-    });
+/// Every channel of every vertex, added up.
+fn brightness(vertices: &[horizon_client::hud::HudVertex]) -> u64 {
+    vertices
+        .iter()
+        .flat_map(|v| [v.color & 0xFF, v.color >> 8 & 0xFF, v.color >> 16 & 0xFF])
+        .map(u64::from)
+        .sum()
 }
 
 #[test]
 #[ignore = "daily"]
-fn sections_move_hide_and_are_lit_in_one_depth() {
+fn default_parts_and_a_group_in_place_draw_exactly_as_draw_scene() {
     crate::game::native_entity_refs::tests::with_client_game(|game| {
-        let still = Scene::new(pair(game, 1)).with_sections(vec![SceneSection::new(), SceneSection::new()]);
-        let base = drawn(game, &still);
-        let lifted = still.clone().with_sections(vec![SceneSection::new(), moved([0.0, 2.0, 0.0])]);
-        let up = drawn(game, &lifted);
-        assert_eq!(base.len(), up.len());
-        assert!(
-            up.iter().map(|v| v.pos[1]).fold(f32::INFINITY, f32::min)
-                < base.iter().map(|v| v.pos[1]).fold(f32::INFINITY, f32::min),
-            "the lifted block is drawn higher on the screen"
-        );
-        let hidden = still.clone().with_sections(vec![SceneSection::new(), SceneSection::new().drawn(false)]);
-        let first = Scene::new(pair(game, 1)[..1].to_vec());
-        assert_eq!(drawn(game, &hidden).len(), drawn(game, &first).len());
-        let dim = still.with_sections(vec![SceneSection::new(), SceneSection::new().lit(5, 5)]);
-        let channels = |v: &[horizon_client::hud::HudVertex]| -> u64 {
-            v.iter()
-                .map(|v| u64::from(v.color & 0xFF) + u64::from(v.color >> 8 & 0xFF) + u64::from(v.color >> 16 & 0xFF))
-                .sum()
-        };
-        assert!(channels(&drawn(game, &dim)) < channels(&base), "light 5 darkens its section");
-    });
-}
-
-#[test]
-#[ignore = "daily"]
-fn a_quad_behind_a_block_is_further_than_the_block_and_breaking_overlays_each_face() {
-    crate::game::native_entity_refs::tests::with_client_game(|game| {
-        let stone = block(game, "minecraft:stone");
-        let one = vec![mod_api::SceneBlock::new([0, 0, 0], stone, None)];
-        let faces = drawn(game, &Scene::new(one.clone())).len();
-        // A quad well behind the block (the view looks south, so behind is +z).
-        let behind = mod_api::SceneQuad::new(
-            [[0.0, 1.0, 3.0], [0.0, 0.0, 3.0], [1.0, 0.0, 3.0], [1.0, 1.0, 3.0]],
-            0xFFFF_0000,
-        );
-        let with = drawn(game, &Scene::new(one.clone()).with_quads(vec![behind]));
-        assert_eq!(with.len(), faces + 6);
-        let red = with.iter().position(|v| v.color == horizon_client::hud_layout::abgr(0xFFFF_0000)).unwrap();
-        let nearest_block = with
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !(red..red + 6).contains(i))
-            .map(|(_, v)| v.depth)
-            .fold(f32::INFINITY, f32::min);
-        assert!(with[red].depth > nearest_block, "the quad lies behind the block's front");
-
-        let broken = vec![mod_api::SceneBlock::new([0, 0, 0], stone, None).breaking(3)];
-        assert_eq!(drawn(game, &Scene::new(broken)).len(), faces * 2, "a crack over every face drawn");
-    });
-}
-
-#[test]
-#[ignore = "daily"]
-fn view_shading_and_a_biome_change_colours_only() {
-    crate::game::native_entity_refs::tests::with_client_game(|game| {
-        let grass = vec![mod_api::SceneBlock::new([0, 0, 0], block(game, "minecraft:grass_block"), None)];
-        let faces = drawn(game, &Scene::new(grass.clone()));
-        let lit = drawn(
-            game,
-            &Scene::new(grass.clone()).with_shading(mod_api::SceneShading::View {
-                lights: [[0.4, -1.0, 0.7], [-0.4, -0.5, 0.7]],
-            }),
-        );
-        assert_eq!(faces.len(), lit.len());
-        assert!(faces.iter().zip(&lit).any(|(a, b)| a.color != b.color));
-        let swamp = drawn(
-            game,
-            &Scene::new(grass).with_biome(mod_api::Identifier::parse("minecraft:swamp").unwrap()),
-        );
-        assert_eq!(faces.len(), swamp.len());
-        assert!(faces.iter().zip(&swamp).any(|(a, b)| a.color != b.color), "swamp grass is another green");
-    });
-}
-
-#[test]
-#[ignore = "daily"]
-fn a_scene_in_sections_keeps_its_particles_when_its_blocks_change() {
-    crate::game::native_entity_refs::tests::with_client_game(|game| {
-        let furnace = mod_api::SceneBlock::new([0, 0, 0], lit_furnace(game), None);
-        let stone = mod_api::SceneBlock::new([2, 0, 0], block(game, "minecraft:stone"), None);
-        let sections = vec![SceneSection::new()];
-        for (id, kept) in [(51, true), (52, false)] {
-            let first = Scene::new(vec![furnace.clone()]).with_clock(SceneClock::new(id, 0, 0.0));
-            let first = if kept { first.with_sections(sections.clone()) } else { first };
-            run(game, &first, 0..=30);
-            let before = game.scene_particles("", id);
-            assert!(!before.is_empty());
-            // A block shown: the same scene one tick on, with one more block.
-            let mut changed = first.clone();
-            changed.blocks.push(stone.clone());
-            changed.clock.as_mut().unwrap().tick = 30;
-            game.frames += 1;
-            assert_eq!(draw(game, &changed, view()).0, Ok(()));
+        let mut plain = pair(game);
+        // Fluids and the game's block entities are drawn only when asked for.
+        for (x, name) in [(3, "minecraft:water"), (5, "minecraft:chest")] {
+            plain
+                .blocks
+                .push(mod_api::SceneBlock::new([x, 0, 0], block(game, name), None));
+        }
+        let mut batch = HudBatch::scratch([320, 240]);
+        GameDrawContext::new(game, &mut batch)
+            .draw_scene(RECT, &plain, view())
+            .unwrap();
+        assert!(!batch.vertices.is_empty());
+        for parts in [SceneParts::new(), grouped(&[group(0, 4, [0.0; 3])])] {
             assert_eq!(
-                game.scene_particles("", id) == before,
-                kept,
-                "sections keep the particles (paused at the same tick); a plain scene starts over"
+                bytemuck::cast_slice::<_, u8>(&batch.vertices),
+                bytemuck::cast_slice::<_, u8>(&drawn(game, &plain, &parts))
             );
         }
     });
@@ -629,10 +986,191 @@ fn a_scene_in_sections_keeps_its_particles_when_its_blocks_change() {
 
 #[test]
 #[ignore = "daily"]
-fn water_is_meshed_against_its_own_section_and_tinted_by_the_biome() {
+fn groups_move_hide_and_are_lit_in_one_depth() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let scene = pair(game);
+        let second = group(1, 1, [0.0; 3]);
+        let base = drawn(game, &scene, &grouped(&[second]));
+        let up = drawn(game, &scene, &grouped(&[group(1, 1, [0.0, 2.0, 0.0])]));
+        assert_eq!(base.len(), up.len());
+        let top = |v: &[horizon_client::hud::HudVertex]| {
+            v.iter().map(|v| v.pos[1]).fold(f32::INFINITY, f32::min)
+        };
+        assert!(top(&up) < top(&base), "the lifted block is drawn higher");
+        let first = Scene::new(scene.blocks[..1].to_vec());
+        assert_eq!(
+            drawn(game, &scene, &grouped(&[second.drawn(false)])).len(),
+            drawn(game, &first, &SceneParts::new()).len()
+        );
+        let dim = drawn(game, &scene, &grouped(&[second.lit(5, 5)]));
+        assert!(
+            brightness(&dim) < brightness(&base),
+            "light 5 darkens its section"
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_moved_group_faces_and_overlays_share_one_depth() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let stone = block(game, "minecraft:stone");
+        let one = Scene::new(vec![mod_api::SceneBlock::new([0, 0, 0], stone, None)]);
+        // The view looks south, so +z lies behind.
+        let corners = [
+            [0.0, 1.0, 3.0],
+            [0.0, 0.0, 3.0],
+            [1.0, 0.0, 3.0],
+            [1.0, 1.0, 3.0],
+        ];
+        let tints = [0xFF10_0000, 0xFF20_0000, 0xFF30_0000, 0xFF40_0000];
+        let face = SceneFace::new(SceneTexturedQuad::new(
+            "block/stone",
+            corners,
+            [[0.0; 2], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
+            0xFFFF_FFFF,
+        ))
+        .tinted(tints);
+        let parts = |by: f32| {
+            grouped(&[group(0, 1, [0.0, 0.0, by])])
+                .with_faces(vec![face.clone()])
+                .with_overlays(vec![SceneOverlay::quad(
+                    corners,
+                    0xFF00_FF00,
+                    SceneDepth::Tested,
+                )])
+        };
+        // How far the face's corners and the nearest of the block's are.
+        let depths = |by: f32| {
+            let vertices = drawn(game, &one, &parts(by));
+            let tint = tints.map(horizon_client::hud_layout::abgr);
+            let (face, rest): (Vec<&horizon_client::hud::HudVertex>, Vec<_>) =
+                vertices.iter().partition(|v| tint.contains(&v.color));
+            assert_eq!(face.len(), 6, "each corner kept its own tint");
+            let overlay = horizon_client::hud_layout::abgr(0xFF00_FF00);
+            assert_eq!(rest.iter().filter(|v| v.color == overlay).count(), 6);
+            let near = |v: &[&horizon_client::hud::HudVertex]| {
+                v.iter().map(|v| v.depth).fold(f32::INFINITY, f32::min)
+            };
+            let blocks: Vec<_> = rest.into_iter().filter(|v| v.color != overlay).collect();
+            (near(&face), near(&blocks))
+        };
+        let (face, in_place) = depths(0.0);
+        assert!(face > in_place, "the face lies behind the block's front");
+        let (face, pushed) = depths(8.0);
+        assert!(
+            face < pushed,
+            "and in front once the section is pushed back"
+        );
+        let (_, batch) = draw_parts(game, &one, &parts(0.0).with_overlays(Vec::new()));
+        assert_eq!(
+            batch.blends,
+            vec![(
+                0..batch.vertices.len() as u32,
+                Blend::Depth([10, 10, 100, 80])
+            )],
+            "the section and the face test against one depth"
+        );
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn breaking_lays_a_crack_over_every_face_drawn() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let stone = block(game, "minecraft:stone");
+        let one = Scene::new(vec![mod_api::SceneBlock::new([0, 0, 0], stone, None)]);
+        let faces = drawn(game, &one, &SceneParts::new()).len();
+        let breaking = |stage| SceneParts::new().with_breaking(vec![(0, stage)]);
+        assert_eq!(drawn(game, &one, &breaking(3)).len(), faces * 2);
+        assert_eq!(drawn(game, &one, &breaking(10)).len(), faces);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn view_shading_and_a_biome_change_colours_only() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let grass = Scene::new(vec![mod_api::SceneBlock::new(
+            [0, 0, 0],
+            block(game, "minecraft:grass_block"),
+            None,
+        )]);
+        let faces = drawn(game, &grass, &SceneParts::new());
+        let lit = SceneParts::new().with_shading(SceneShading::View {
+            lights: [[0.4, -1.0, 0.7], [-0.4, -0.5, 0.7]],
+        });
+        let swamp =
+            SceneParts::new().with_biome(mod_api::Identifier::parse("minecraft:swamp").unwrap());
+        for parts in [lit, swamp] {
+            let changed = drawn(game, &grass, &parts);
+            assert_eq!(faces.len(), changed.len());
+            assert!(faces.iter().zip(&changed).any(|(a, b)| a.color != b.color));
+        }
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_scene_that_keeps_its_particles_goes_on_when_its_inputs_change() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let furnace = mod_api::SceneBlock::new([0, 0, 0], lit_furnace(game), None);
+        let stone = mod_api::SceneBlock::new([2, 0, 0], block(game, "minecraft:stone"), None);
+        for (id, kept) in [(51, true), (52, false)] {
+            let parts = SceneParts::new().keep_particles(kept);
+            let first = Scene::new(vec![furnace.clone()]).with_clock(SceneClock::new(id, 0, 0.0));
+            for tick in 0..=30 {
+                show_parts(game, &first, &parts, tick);
+            }
+            let before = game.scene_particles("", id);
+            assert!(!before.is_empty());
+            // A block shown and an entity set down, at the same tick.
+            let mut changed = first.clone().with_entities(vec![cow([1.5, 0.0, 0.5])]);
+            changed.blocks.push(stone.clone());
+            show_parts(game, &changed, &parts, 30);
+            assert_eq!(game.scene_particles("", id) == before, kept);
+            // A refused part changes nothing kept.
+            let mut bad = changed.clone();
+            bad.clock.as_mut().unwrap().tick = 31;
+            let held = game.scene_particles("", id);
+            assert_eq!(
+                draw_parts(game, &bad, &parts.clone().with_breaking(vec![(9, 1)])).0,
+                Err(ScenePartsError::NoBlock { index: 9 })
+            );
+            assert_eq!(game.scene_particles("", id), held);
+            assert_eq!(game.scene_tick("", id), Some(30));
+        }
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn particles_kept_outlive_the_frames_that_add_none() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let stone = mod_api::SceneBlock::new([0, 0, 0], block(game, "minecraft:stone"), None);
+        let clock = |tick| SceneClock::new(53, tick, 0.0).animate_blocks(false);
+        let parts = SceneParts::new().keep_particles(true);
+        let quiet = |tick| Scene::new(vec![stone.clone()]).with_clock(clock(tick));
+        game.frames += 1;
+        assert_eq!(draw_parts(game, &quiet(0), &parts).0, Ok(()));
+        game.frames += 1;
+        let puff = quiet(1).with_particles(vec![smoke([0.5, 2.0, 0.5], [0.0; 3])]);
+        assert_eq!(draw_parts(game, &puff, &parts).0, Ok(()));
+        assert_eq!(game.scene_particles("", 53).len(), 1);
+        game.frames += 1;
+        assert_eq!(draw_parts(game, &quiet(2), &parts).0, Ok(()));
+        assert_eq!(game.scene_particles("", 53).len(), 1);
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn water_is_meshed_against_its_own_group_and_tinted_by_the_biome() {
     crate::game::native_entity_refs::tests::with_client_game(|game| {
         let water = mod_api::SceneBlock::new([0, 0, 0], block(game, "minecraft:water"), None);
-        let alone = drawn(game, &Scene::new(vec![water.clone()]));
+        let stone = mod_api::SceneBlock::new([1, 0, 0], block(game, "minecraft:stone"), None);
+        let fluids = SceneParts::new().fluids(true);
+        let alone = drawn(game, &Scene::new(vec![water.clone()]), &fluids);
         assert!(!alone.is_empty(), "a water source is drawn");
         // Every corner samples the water's own sprites in the GUI atlas.
         let sprites = &game.gui.atlas.sprites;
@@ -642,33 +1180,27 @@ fn water_is_meshed_against_its_own_section_and_tinted_by_the_biome() {
             .collect();
         for v in &alone {
             assert!(
-                water_sprites.iter().any(|r| (r.u0..=r.u1).contains(&v.uv[0])
-                    && (r.v0..=r.v1).contains(&v.uv[1])),
+                water_sprites
+                    .iter()
+                    .any(|r| (r.u0..=r.u1).contains(&v.uv[0]) && (r.v0..=r.v1).contains(&v.uv[1])),
                 "a corner at {:?} lies outside the water's sprites",
                 v.uv
             );
         }
-        let glass = mod_api::SceneBlock::new([1, 0, 0], block(game, "minecraft:stone"), None);
-        let sections = vec![SceneSection::new(), SceneSection::new()];
-        let together = drawn(
-            game,
-            &Scene::new(vec![water.clone(), glass.clone()]).with_sections(sections.clone()),
-        );
-        let apart = drawn(
-            game,
-            &Scene::new(vec![water.clone(), glass.in_section(1)]).with_sections(sections),
-        );
+        let both = Scene::new(vec![water.clone(), stone]);
+        let together = drawn(game, &both, &fluids);
+        let apart = fluids.clone().with_groups(vec![group(1, 1, [0.0; 3])]);
         assert!(
-            apart.len() > together.len(),
+            drawn(game, &both, &apart).len() > together.len(),
             "the stone hides the water's east side only when they share a section"
         );
-        let swamp = drawn(
-            game,
-            &Scene::new(vec![water])
-                .with_biome(mod_api::Identifier::parse("minecraft:swamp").unwrap()),
-        );
+        let swamp = fluids.with_biome(mod_api::Identifier::parse("minecraft:swamp").unwrap());
+        let swamp = drawn(game, &Scene::new(vec![water]), &swamp);
         assert_eq!(alone.len(), swamp.len());
-        assert!(alone.iter().zip(&swamp).any(|(a, b)| a.color != b.color), "swamp water");
+        assert!(
+            alone.iter().zip(&swamp).any(|(a, b)| a.color != b.color),
+            "swamp water"
+        );
     });
 }
 
@@ -676,12 +1208,21 @@ fn water_is_meshed_against_its_own_section_and_tinted_by_the_biome() {
 #[ignore = "daily"]
 fn game_block_entities_are_drawn_by_their_renderers_with_their_saved_data() {
     crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let with = |data| SceneParts::new().with_game_block_entities(data);
+        let one = |name| {
+            Scene::new(vec![mod_api::SceneBlock::new(
+                [0, 0, 0],
+                block(game, name),
+                None,
+            )])
+        };
         // A chest has no block model: without its renderer the scene draws nothing.
-        let chest = mod_api::SceneBlock::new([0, 0, 0], block(game, "minecraft:chest"), None);
-        assert!(!drawn(game, &Scene::new(vec![chest])).is_empty(), "the chest is drawn");
+        let chest = one("minecraft:chest");
+        assert!(drawn(game, &chest, &SceneParts::new()).is_empty());
+        assert!(!drawn(game, &chest, &with(Vec::new())).is_empty());
 
-        let sign = mod_api::SceneBlock::new([0, 0, 0], block(game, "minecraft:oak_sign"), None);
-        let blank = drawn(game, &Scene::new(vec![sign.clone()])).len();
+        let sign = one("minecraft:oak_sign");
+        let blank = drawn(game, &sign, &with(Vec::new())).len();
         let mut text = Compound::new();
         let mut front = Compound::new();
         front.insert(
@@ -694,8 +1235,7 @@ fn game_block_entities_are_drawn_by_their_renderers_with_their_saved_data() {
             ),
         );
         text.insert("front_text".into(), mod_api::Tag::Compound(front));
-        let written = drawn(game, &Scene::new(vec![sign.with_game_data(text)])).len();
-        assert!(written > blank, "the sign's text is drawn ({written} > {blank})");
+        let written = drawn(game, &sign, &with(vec![(0, text)])).len();
+        assert!(written > blank, "the sign's text ({written} > {blank})");
     });
 }
-

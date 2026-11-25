@@ -28,7 +28,6 @@ impl TryIntoApi for TemplateSnapshot<'_> {
 /// identifiers or saved fields, and never resolves names.
 pub(in crate::game) fn scene_blocks(
     blocks: &[mod_api::SceneBlock],
-    sections: usize,
 ) -> Result<Vec<SceneBlock<'_>>, mod_api::SceneError> {
     if blocks.len() > mod_api::SCENE_MAX_BLOCKS {
         return Err(mod_api::SceneError::TooManyBlocks);
@@ -37,21 +36,14 @@ pub(in crate::game) fn scene_blocks(
     (0u32..)
         .zip(blocks)
         .map(|(at, block)| {
-            // With no sections every block is in the one implicit section.
-            if sections > 0 && block.section as usize >= sections {
-                return Err(mod_api::SceneError::BadSection {
-                    index: block.section,
-                });
-            }
             Ok(SceneBlock {
                 pos: block.pos,
                 state: index
                     .to_engine(block.state)
                     .map_err(|_| mod_api::SceneError::BadBlock { index: at })?,
                 entity: block.entity.as_ref(),
-                section: block.section as usize,
-                breaking: block.breaking.filter(|stage| *stage <= 9),
-                game_data: block.game_data.as_ref(),
+                breaking: None,
+                game_data: None,
             })
         })
         .collect()
@@ -125,7 +117,7 @@ mod tests {
             mod_api::SceneBlock::new([2, 0, 0], north, None),
         ];
         let original = scene.clone();
-        let prepared = scene_blocks(&scene, 0).unwrap();
+        let prepared = scene_blocks(&scene).unwrap();
         assert_eq!(
             prepared.iter().map(|b| b.state).collect::<Vec<_>>(),
             [BlockStateId(2), BlockStateId(1), BlockStateId(2)]
@@ -138,7 +130,7 @@ mod tests {
         assert_eq!(scene, original);
         scene[1].state = BlockState::from(BlockStateRecord::new(east.block(), u16::MAX));
         assert!(matches!(
-            scene_blocks(&scene, 0),
+            scene_blocks(&scene),
             Err(mod_api::SceneError::BadBlock { index: 1 })
         ));
         assert_eq!(scene[1].state.ordinal(), u16::MAX);
@@ -152,12 +144,12 @@ mod tests {
         block_state::bind(&only_air).unwrap();
         scene[1].state = east;
         assert!(matches!(
-            scene_blocks(&scene, 0),
+            scene_blocks(&scene),
             Err(mod_api::SceneError::BadBlock { index: 0 })
         ));
         block_state::clear();
         assert!(matches!(
-            scene_blocks(&scene, 0),
+            scene_blocks(&scene),
             Err(mod_api::SceneError::Unavailable)
         ));
         assert_eq!(source.try_into_api(), Err(BlockStateError::Unavailable));
