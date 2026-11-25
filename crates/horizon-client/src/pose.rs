@@ -214,9 +214,8 @@ impl PlayerMotion {
     pub fn moving_slowly(&self) -> bool {
         let visually_swimming =
             self.pose == Pose::Swimming || (!self.fall_flying && self.pose == Pose::FallFlying);
-        let crawling = visually_swimming
-            && !self.fluids.was_touching_water
-            && self.swim_immersion().is_none();
+        let crawling =
+            visually_swimming && !self.fluids.was_touching_water && self.swim_immersion().is_none();
         self.local_crouching || crawling
     }
 }
