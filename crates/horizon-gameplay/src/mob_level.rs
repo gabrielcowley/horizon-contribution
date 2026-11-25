@@ -6,7 +6,10 @@ use horizon_client::{
     fast_hash::FxHashSet,
     items::{ItemStack, Items},
     join_seq::JoinList,
-    mobs::{Mob, MobWorld},
+    mobs::{
+        Mob, MobWorld,
+        equip::{Facts, Slot},
+    },
     stations::StationData,
     world::World,
 };
@@ -16,7 +19,7 @@ use horizon_core::geometry::Vec3;
 pub struct MobParts<'a> {
     pub mobs: &'a mut JoinList<Mob>,
     pub dropped: &'a mut JoinList<ItemEntity>,
-    /// The id the next entity will take (`ItemAreas` keys its cache on it).
+    /// The last entity id handed out; the next entity takes this plus one (`ItemAreas` keys its cache on it).
     pub next_entity: u32,
     /// The mobs that ticked this tick.
     pub ticked: &'a FxHashSet<u32>,
@@ -56,12 +59,18 @@ pub trait MobLevel {
     /// listens.
     fn grief_hooked(&self) -> bool;
     /// `new ItemEntity(level, x, y, z, stack)` and `addFreshEntity`: the item's
-    /// own random draws its motion, which this returns.
-    fn spawn_item_own(&mut self, stack: ItemStack, at: [f64; 3], pickup_delay: u32) -> [f64; 3];
+    /// own random draws its motion, returning its entity id when spawned.
+    fn spawn_item_own(&mut self, stack: ItemStack, at: [f64; 3], pickup_delay: u32) -> Option<u32>;
     /// `new ItemEntity(level, x, y, z, stack, dx, dy, dz)` and `addFreshEntity`.
-    fn spawn_item(&mut self, stack: ItemStack, at: [f64; 3], velocity: [f64; 3], pickup_delay: u32);
-    /// The item entity the last spawn added, unless a mod kept it out of the level.
-    fn just_spawned_item(&mut self) -> Option<&mut ItemEntity>;
+    fn spawn_item(
+        &mut self,
+        stack: ItemStack,
+        at: [f64; 3],
+        velocity: [f64; 3],
+        pickup_delay: u32,
+    ) -> Option<u32>;
+    /// The dropped item entity `id`, if it is still in the level.
+    fn item_entity_mut(&mut self, id: u32) -> Option<&mut ItemEntity>;
     /// `Entity.getUUID` of a mob, made up for a new one.
     fn mob_uuid(&mut self, id: u32) -> [i32; 4];
     /// `Level.playSound` at a position, no player excluded.
@@ -94,4 +103,11 @@ pub trait MobLevel {
     fn equip_allows(&self, prepared: &Self::Equip, index: usize, slot: &str, data: bool) -> bool;
     /// Whether the preparation still holds for the mob `id` (nothing it read changed).
     fn equip_can_apply(&self, prepared: &Self::Equip, id: u32) -> bool;
+    /// `Mob.equipItemIfPossible`: equips `stack` in the slot it takes and returns how many items
+    /// that equip took. `Some(taken)` reports a completed equip, with `taken` at most the stack's
+    /// count; `None` means nothing was equipped.
+    fn equip_item_if_possible(&mut self, index: usize, stack: &ItemStack) -> Option<u32>;
+    /// The numbers `Mob.compareArmor` and `compareWeapons` read off `stack` in `slot` for
+    /// the mob `m`.
+    fn stack_facts(&self, m: &Mob, stack: &ItemStack, slot: Slot) -> Facts;
 }

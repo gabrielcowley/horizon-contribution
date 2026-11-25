@@ -1,10 +1,11 @@
 use super::*;
 use mod_api::prelude::RecipesClientHost;
 use mod_api::{PanelStyle, RecipeLayout, RecipeResult, RecipeTransferCheck, RecipeView, Stack};
+use std::cell::RefCell;
 
 thread_local! {
-    static SHOWN: std::cell::RefCell<Option<(String, String, u32, Vec<RecipeView>)>> =
-        const { std::cell::RefCell::new(None) };
+    /// The page the game was asked to show: the mod, the title, the tab and the recipes.
+    static SHOWN: RefCell<Option<(String, String, u32, Vec<RecipeView>)>> = const { RefCell::new(None) };
 }
 
 struct Client;
@@ -12,27 +13,13 @@ impl mod_api::Host for Client {}
 mod_api::impl_host_areas!(Client);
 impl mod_api::ClientHost for Client {}
 mod_api::impl_client_host_areas!(Client, except(recipes));
-// A boundary reply fixture: the rest of the area is not called.
+// A boundary fixture: only the recipe page is shown and the owner asked.
 impl RecipesClientHost for Client {
     fn panel_items(&mut self, _: &str, _: Vec<Stack>) {
         unreachable!()
     }
     fn panel_style(&mut self, _: &str, _: PanelStyle) {
         unreachable!()
-    }
-    fn panel_recipes(
-        &mut self,
-        mod_id: &str,
-        title: &str,
-        tabs: Vec<Stack>,
-        tab: u32,
-        recipes: Vec<RecipeView>,
-    ) {
-        assert!(tabs.is_empty());
-        SHOWN.set(Some((mod_id.into(), title.into(), tab, recipes)));
-    }
-    fn panel_owner(&self) -> Option<String> {
-        Some("viewer".into())
     }
     fn place_recipe(&mut self, _: i32, _: bool) -> Result<(), String> {
         unreachable!()
@@ -48,6 +35,20 @@ impl RecipesClientHost for Client {
     }
     fn recipe_book_ids(&mut self, _: &str) -> Arc<[i32]> {
         unreachable!()
+    }
+    fn panel_recipes(
+        &mut self,
+        mod_id: &str,
+        title: &str,
+        tabs: Vec<Stack>,
+        tab: u32,
+        views: Vec<RecipeView>,
+    ) {
+        assert!(tabs.is_empty());
+        SHOWN.set(Some((mod_id.into(), title.into(), tab, views)));
+    }
+    fn panel_owner(&self) -> Option<String> {
+        Some("viewer".into())
     }
 }
 
@@ -67,32 +68,21 @@ fn a_recipe_page_and_the_panel_owner_cross_the_host_call() {
         unsafe { boundary::serve(id, &mut *cx.borrow_mut(), bytes, &mut out) }.unwrap();
         out.into_bytes()
     })));
-    let recipes = vec![
-        RecipeView {
-            width: 2,
-            height: 3,
-            slots: vec![Vec::new(); 4],
-            results: vec![
-                RecipeResult::default(),
-                RecipeResult {
-                    stacks: Vec::new(),
-                    chance: Some(12.5),
-                },
-            ],
-            note: "200 ticks".into(),
-            action: Some(false),
-            ..RecipeView::default()
-        },
-        RecipeView {
-            layout: RecipeLayout::Brewing,
-            action: Some(true),
-            ..RecipeView::default()
-        },
-    ];
-    guest::Guest.panel_recipes("crusher", "Crushing", Vec::new(), 3, recipes.clone());
+    let mut grid = RecipeView::new(
+        RecipeLayout::Grid,
+        vec![Vec::new(); 6],
+        vec![RecipeResult::new(Vec::new())],
+    );
+    (grid.width, grid.height, grid.action) = (3, 2, Some(false));
+    let mut lucky = RecipeResult::new(Vec::new());
+    lucky.chance = Some(25.0);
+    let mut cooking = RecipeView::new(RecipeLayout::Cooking, vec![Vec::new()], vec![lucky]);
+    cooking.note = "10 s, 0.1 XP".into();
+    let views = vec![grid, cooking];
+    guest::Guest.panel_recipes("recipes", "Recipes: Stick", Vec::new(), 1, views.clone());
     assert_eq!(
         SHOWN.take(),
-        Some(("crusher".into(), "Crushing".into(), 3, recipes))
+        Some(("recipes".into(), "Recipes: Stick".into(), 1, views))
     );
     assert_eq!(guest::Guest.panel_owner().as_deref(), Some("viewer"));
     guest::set_transport(None);

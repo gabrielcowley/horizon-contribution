@@ -7,8 +7,19 @@ use horizon_client::{
 };
 use horizon_core::{geometry::Vec3, random::RandomSource};
 
+/// What allay code calls on its level beyond [`MobLevel`]: the game's own allay
+/// methods, which mods target. Each runs the function of this module of the same name.
+pub trait AllayLevel: MobLevel {
+    /// `GoAndGiveItemsToTarget` / `AllayAi.throwItem` ([`deliver`]).
+    fn allay_deliver(&mut self, i: usize);
+    /// `AllayAi.getLikedPlayer` ([`liked_player`]).
+    fn allay_liked_player(&self, i: usize) -> Option<Vec3>;
+    /// The UUID of the player an allay likes ([`liked_uuid`]).
+    fn allay_liked_uuid(&self, i: usize) -> [i32; 4];
+}
+
 /// `Allay.aiStep`'s looting and the brain's item behaviours, once a tick.
-pub fn tick_allays<L: MobLevel + ?Sized>(l: &mut L) {
+pub fn tick_allays<L: AllayLevel + ?Sized>(l: &mut L) {
     let griefing = l.mob_griefing();
     for i in 0..l.parts().mobs.len() {
         let p = l.parts();
@@ -37,19 +48,32 @@ pub fn tick_allays<L: MobLevel + ?Sized>(l: &mut L) {
             })
         };
         let reach = allay::pickup_reach(mobs[i].bounds());
-        // GoToWantedItem: a stack it considers equal within 32 that the
-        // allay sees (NearestItemSensor's hasLineOfSight, eye to eye). The
-        // sensor is the brain's, so without AI only `Mob.aiStep`'s looting
-        // loop runs: it takes an equal drop already in `getPickupReach`.
-        let wanted = if !wants {
+        // `Mob.aiStep`: takes an equal drop in reach without a line-of-sight check (#20557).
+        let in_reach = if !wants {
             None
-        } else if mobs[i].no_ai {
-            dropped.iter().position(|e| {
-                e.pickup_delay == 0
-                    && allay::considers_item_equal(&held, &e.stack)
-                    && room(&e.stack) > 0
-                    && reach.contains(e.position)
-            })
+        } else {
+            dropped
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| {
+                    reach.intersects(e.bounds())
+                        && e.pickup_delay == 0
+                        && allay::considers_item_equal(&held, &e.stack)
+                        && room(&e.stack) > 0
+                })
+                .min_by(|(_, a), (_, b)| {
+                    a.position
+                        .distance_squared(pos)
+                        .total_cmp(&b.position.distance_squared(pos))
+                })
+                .map(|(j, _)| j)
+        };
+        // GoToWantedItem: a stack it considers equal within 32 that the
+        // allay sees (NearestItemSensor's hasLineOfSight, eye to eye).
+        let target = if let Some(j) = in_reach {
+            Some(j)
+        } else if !wants || mobs[i].no_ai {
+            None
         } else {
             let w = l.mob_world();
             let eye = Vec3::new(pos.x, mobs[i].eye_y(), pos.z);
@@ -79,18 +103,18 @@ pub fn tick_allays<L: MobLevel + ?Sized>(l: &mut L) {
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(j, _)| j)
         };
-        let Some(j) = wanted else {
+        let Some(j) = target else {
             let p = l.parts();
             p.mobs[i].extra.point = None;
             // `GiveInventoryToLookTargetPlayer` is the brain's too.
             if !p.mobs[i].no_ai {
-                deliver(l, i);
+                l.allay_deliver(i);
             }
             continue;
         };
         let p = l.parts();
         let e = &p.dropped[j];
-        if reach.contains(e.position) {
+        if reach.intersects(e.bounds()) {
             let (item, id) = (e.clone(), p.mobs[i].id);
             let max = p.mobs[i].kind.inventory_stack_limit(&e.stack);
             let take = p.mobs[i]
@@ -117,7 +141,7 @@ pub fn tick_allays<L: MobLevel + ?Sized>(l: &mut L) {
 }
 
 /// The UUID of the player an allay likes (`LIKED_PLAYER`).
-fn liked_uuid<L: MobLevel + ?Sized>(l: &L, i: usize) -> [i32; 4] {
+pub fn liked_uuid<L: MobLevel + ?Sized>(l: &L, i: usize) -> [i32; 4] {
     // An allay saved before its player was kept belongs to the host.
     l.mobs()[i]
         .extra
@@ -130,12 +154,12 @@ fn liked_uuid<L: MobLevel + ?Sized>(l: &L, i: usize) -> [i32; 4] {
 /// `AllayAi.getLikedPlayer`: the player the allay was given an item by,
 /// found by UUID among the players of the level, when they are not a
 /// spectator and within 64 blocks.
-fn liked_player<L: MobLevel + ?Sized>(l: &L, i: usize) -> Option<Vec3> {
+pub fn liked_player<L: AllayLevel + ?Sized>(l: &L, i: usize) -> Option<Vec3> {
     let m = &l.mobs()[i];
     if !m.extra.tame {
         return None;
     }
-    let uuid = liked_uuid(l, i);
+    let uuid = l.allay_liked_uuid(i);
     let found = l.player_by_uuid(uuid);
     // The 64-block search uses the feet; the deposit point is the eyes
     // (`new EntityTracker(player, true)`).
@@ -147,7 +171,7 @@ fn liked_player<L: MobLevel + ?Sized>(l: &L, i: usize) -> Option<Vec3> {
 /// `GoAndGiveItemsToTarget` / `AllayAi.throwItem`: within 3 blocks of
 /// the deposit, one item a tick, each restarting the three-second pause
 /// before it picks anything up again.
-fn deliver<L: MobLevel + ?Sized>(l: &mut L, i: usize) {
+pub fn deliver<L: AllayLevel + ?Sized>(l: &mut L, i: usize) {
     if allay::inventory(&l.mobs()[i]).is_none() {
         return;
     }
@@ -158,7 +182,7 @@ fn deliver<L: MobLevel + ?Sized>(l: &mut L, i: usize) {
     let noteblock = allay::noteblock_deposit(&mut p.mobs[i], dimension, |p| {
         &*facts.get(world.block(p[0], p[1], p[2])).name == "minecraft:note_block"
     });
-    let player = liked_player(l, i);
+    let player = l.allay_liked_player(i);
     let m = &l.mobs()[i];
     let target = match noteblock {
         Some(p) => Vec3::new(p[0], p[1], p[2]),
@@ -193,7 +217,7 @@ fn deliver<L: MobLevel + ?Sized>(l: &mut L, i: usize) {
         (target.y - 1.0).floor() as i32,
         target.z.floor() as i32,
     ];
-    let uuid = liked_uuid(l, i);
+    let uuid = l.allay_liked_uuid(i);
     // AllayAi.throwItem: one item of the pocket stack, its components and all.
     let stack = ItemStack { count: 1, ..item };
     l.trigger_block_for(uuid, "minecraft:allay_drop_item_on_block", below, &stack);
@@ -201,12 +225,13 @@ fn deliver<L: MobLevel + ?Sized>(l: &mut L, i: usize) {
     m.extra.allay.as_mut().unwrap().take(1);
     allay::set_pickup_cooldown(m, Some(60));
     // ItemEntity.setDefaultPickUpDelay.
-    l.spawn_item(stack, from, v, 10);
-    // BehaviorUtils.throwItem: ItemEntity.setThrower(the allay).
-    let id = l.mobs()[i].id;
-    let allay = l.mob_uuid(id);
-    if let Some(thrown) = l.just_spawned_item() {
-        thrown.thrower = Some(allay);
+    if let Some(thrown_id) = l.spawn_item(stack, from, v, 10) {
+        // BehaviorUtils.throwItem: ItemEntity.setThrower(the allay).
+        let id = l.mobs()[i].id;
+        let allay = l.mob_uuid(id);
+        if let Some(thrown) = l.item_entity_mut(thrown_id) {
+            thrown.thrower = Some(allay);
+        }
     }
     let world = l.parts().world;
     if world.game_time % 7 == 0 && world.random.next_double() < 0.9 {

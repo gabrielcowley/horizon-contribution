@@ -15,12 +15,6 @@ impl RecipesClientHost for Client {
     fn panel_style(&mut self, _: &str, _: PanelStyle) {
         unreachable!()
     }
-    fn panel_recipes(&mut self, _: &str, _: &str, _: Vec<Stack>, _: u32, _: Vec<RecipeView>) {
-        unreachable!()
-    }
-    fn panel_owner(&self) -> Option<String> {
-        unreachable!()
-    }
     fn place_recipe(&mut self, _: i32, _: bool) -> Result<(), String> {
         unreachable!()
     }
@@ -31,6 +25,12 @@ impl RecipesClientHost for Client {
         unreachable!()
     }
     fn transfer_recipe_check(&mut self, _: i32) -> Option<RecipeTransferCheck> {
+        unreachable!()
+    }
+    fn panel_recipes(&mut self, _: &str, _: &str, _: Vec<Stack>, _: u32, _: Vec<RecipeView>) {
+        unreachable!()
+    }
+    fn panel_owner(&self) -> Option<String> {
         unreachable!()
     }
     fn recipe_book_ids(&mut self, recipe_id: &str) -> Arc<[i32]> {

@@ -39,7 +39,7 @@ The following documented `Game` helpers are not in the trait yet:
 - `spawn_mob`, `mob`, `mobs`, `block_in_tag`, `item_in_tag`,
   `server_block_in_tag`, `server_item_in_tag`, `server_block`,
   `set_display`, `sidebar`, `experience_orbs`,
-  `item_entities`, `player`, `recipes`, `component`,
+  `item_entities`, `player`, `panel_recipes`, `recipes`, `component`,
   `spawn_falling_block`, `explode`,
   `container_slots` uses gameplay-private types.
 - `with_mod_block_entity` is generic, so its signature cannot be called through `dyn Host`.

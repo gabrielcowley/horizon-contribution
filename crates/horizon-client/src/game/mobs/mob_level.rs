@@ -7,7 +7,10 @@ use crate::game::equip_answers::EquipStack;
 use horizon_client::{
     entities::ItemEntity,
     items::ItemStack,
-    mobs::{Mob, MobWorld, equip::EquipInput},
+    mobs::{
+        Mob, MobWorld,
+        equip::{EquipInput, Facts, Slot},
+    },
 };
 use horizon_core::geometry::Vec3;
 use horizon_gameplay::mob_level::{MobLevel, MobParts};
@@ -80,8 +83,8 @@ impl MobLevel for Game<'_> {
     fn grief_hooked(&self) -> bool {
         Game::grief_hooked(self)
     }
-    fn spawn_item_own(&mut self, stack: ItemStack, at: [f64; 3], pickup_delay: u32) -> [f64; 3] {
-        Game::spawn_item_own(self, stack, at, pickup_delay)
+    fn spawn_item_own(&mut self, stack: ItemStack, at: [f64; 3], pickup_delay: u32) -> Option<u32> {
+        Game::spawn_item_own(self, stack, at, pickup_delay).map(|(id, _)| id)
     }
     fn spawn_item(
         &mut self,
@@ -89,11 +92,11 @@ impl MobLevel for Game<'_> {
         at: [f64; 3],
         velocity: [f64; 3],
         pickup_delay: u32,
-    ) {
-        Game::spawn_item(self, stack, at, velocity, pickup_delay);
+    ) -> Option<u32> {
+        Game::spawn_item(self, stack, at, velocity, pickup_delay)
     }
-    fn just_spawned_item(&mut self) -> Option<&mut ItemEntity> {
-        Game::just_spawned_item(self)
+    fn item_entity_mut(&mut self, id: u32) -> Option<&mut ItemEntity> {
+        Game::dropped_item_mut(self, id)
     }
     fn mob_uuid(&mut self, id: u32) -> [i32; 4] {
         Game::mob_uuid(self, id)
@@ -147,5 +150,11 @@ impl MobLevel for Game<'_> {
     }
     fn equip_can_apply(&self, prepared: &Prepared, id: u32) -> bool {
         Game::equip_can_apply(self, &prepared.stack, id)
+    }
+    fn equip_item_if_possible(&mut self, index: usize, stack: &ItemStack) -> Option<u32> {
+        Game::equip_item_if_possible(self, index, stack)
+    }
+    fn stack_facts(&self, m: &Mob, stack: &ItemStack, slot: Slot) -> Facts {
+        Game::stack_facts(self, m, stack, slot)
     }
 }

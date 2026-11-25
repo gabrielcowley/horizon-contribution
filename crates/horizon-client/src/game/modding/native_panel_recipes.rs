@@ -1,21 +1,21 @@
-//! A mod's recipes shown in its item panel's place (`panel_recipes`,
+//! A mod's recipes shown in its item panel's place (`native_panel_recipes`,
 //! or `browser.set-recipes` of a WebAssembly mod, docs/modding/src/how-to/content-mods.md), laid out by the game with its own slots, arrows and
 //! buttons, paged to the panel's height, under a title and a back button.
 //! The mod hears clicks on their slots, their action buttons, the back
 //! button and page turns.
 use super::{
     Game,
-    native_hooks::PanelEvent as BrowserEvent,
+    native_hooks::{
+        NativeRecipeLayout as BrowserLayout, NativeRecipeResult as BrowserResult,
+        NativeRecipeView as BrowserRecipe, PanelEvent as BrowserEvent,
+    },
     native_panel::{Layout, Owner, browser_stack, inside},
 };
 use horizon_client::{
     hud::{HudBatch, rgba},
     items::ItemStack,
 };
-use mod_api::{
-    RecipeLayout as BrowserLayout, RecipeResult as BrowserResult, RecipeView as BrowserRecipe,
-    Stack as BrowserStack,
-};
+use mod_api::Stack as BrowserStack;
 use std::time::Instant;
 
 const SLOT: f32 = 18.0;
@@ -52,7 +52,7 @@ pub(super) struct RecipePage {
     pub(super) recipes: Vec<BrowserRecipe>,
 }
 impl RecipePage {
-    /// `panel_recipes`' page, cut as `set-recipes` cuts one; none
+    /// `native_panel_recipes`' page, cut as `set-recipes` cuts one; none
     /// without recipes (the items again).
     pub(super) fn new(
         title: &str,
@@ -180,13 +180,7 @@ impl Shown {
     fn inputs(&self) -> ((f32, f32), Vec<(f32, f32)>) {
         let row = |n: usize| (0..n).map(|i| (i as f32 * SLOT, 0.0)).collect();
         match self.layout {
-            // The input over the flame.
-            BrowserLayout::Cooking => ((SLOT, 2.0 * SLOT), vec![(0.0, 0.0)]),
-            BrowserLayout::Single => ((SLOT, SLOT), row(1)),
-            BrowserLayout::Smithing => ((3.0 * SLOT, SLOT), row(3)),
-            BrowserLayout::Brewing => ((2.0 * SLOT, SLOT), row(2)),
-            // `Grid`, and a layout the vocabulary adds later until the game draws it.
-            _ => {
+            BrowserLayout::Grid => {
                 // Slots past the grid continue in rows under it.
                 let w = self.width.max(1);
                 let h = self
@@ -198,6 +192,11 @@ impl Shown {
                     .collect();
                 ((w as f32 * SLOT, h as f32 * SLOT), at)
             }
+            // The input over the flame.
+            BrowserLayout::Cooking => ((SLOT, 2.0 * SLOT), vec![(0.0, 0.0)]),
+            BrowserLayout::Single => ((SLOT, SLOT), row(1)),
+            BrowserLayout::Smithing => ((3.0 * SLOT, SLOT), row(3)),
+            BrowserLayout::Brewing => ((2.0 * SLOT, SLOT), row(2)),
         }
     }
     /// The height of its slots, arrow and button, `room` wide; a chance is
