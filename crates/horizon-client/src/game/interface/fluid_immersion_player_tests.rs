@@ -113,6 +113,7 @@ fn a_swimmable_mod_fluid_moves_the_player_as_water_does() {
             let mut world =
                 std::mem::replace(&mut game.world, horizon_client::world::World::new(stone, 0));
             let mut ticks = Vec::new();
+            let mut slowed = false;
             {
                 let mut w = MotionWorld {
                     entities: &[],
@@ -135,12 +136,25 @@ fn a_swimmable_mod_fluid_moves_the_player_as_water_does() {
                     };
                     w.controlled_simulation_tick(keys).unwrap();
                     ticks.push((w.player.sprinting, w.player.swimming));
+                    if w.player.swimming {
+                        // `Entity.isVisuallyCrawling` as NeoForge patches it: a swim in a fluid it
+                        // can swim in is no crawl, so the input keeps its full strength.
+                        slowed |= w.player.moving_slowly();
+                    }
                 }
             }
             game.world = world;
-            ticks
+            let travelled = (player.position.x - start.x).hypot(player.position.z - start.z);
+            (ticks, slowed, travelled)
         };
-        let (syrup, paint, water) = (swim(2), swim(10), swim(18));
+        let ((syrup, syrup_slowed, syrup_far), (paint, ..), (water, _, water_far)) =
+            (swim(2), swim(10), swim(18));
+        assert!(!syrup_slowed, "a swim in syrup counts as a crawl");
+        // Its sprint starts a tick before water's (below), so it is never behind.
+        assert!(
+            syrup_far >= water_far && syrup_far < water_far * 1.5,
+            "syrup {syrup_far}, water {water_far}"
+        );
         assert_eq!(water.last(), Some(&(true, true)), "water {water:?}");
         // NeoForge's `canStartSwimming` reads this tick's eyes where `isUnderWater` reads the last
         // tick's, so the swim starts one tick before water's.
