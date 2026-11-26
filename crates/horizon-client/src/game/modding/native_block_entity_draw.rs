@@ -236,6 +236,8 @@ pub struct BlockEntityDraw {
     records: Vec<PreparedRecord>,
     /// What is drawn shows the enchanted armour glint (`native_draw_set_glint`).
     glint: bool,
+    /// A block entity drawn in a screen scene (`native_draw_in_scene`).
+    in_scene: bool,
 }
 
 struct PreparedRecord {
@@ -377,6 +379,7 @@ impl BlockEntityDraw {
             prepared: false,
             records: Vec::new(),
             glint: false,
+            in_scene: false,
         }
     }
 
@@ -384,6 +387,11 @@ impl BlockEntityDraw {
     /// which turns its `spin` parts and `animation_time` reads.
     pub(super) fn animated(mut self, time: f64) -> Self {
         self.animation = time;
+        self
+    }
+    /// A block entity drawn in a screen scene, not in a level (`native_draw_in_scene`).
+    pub(super) fn in_scene(mut self) -> Self {
+        self.in_scene = true;
         self
     }
     /// The frame's time on the animation clock (`native_draw_animation_time`).
@@ -806,6 +814,7 @@ impl Game<'_> {
             ),
             records: Vec::new(),
             glint: false,
+            in_scene: false,
         };
         let now = self.world.game_time;
         let mut kept = self.kept_block_entities.borrow_mut();
@@ -1013,6 +1022,10 @@ impl Game<'_> {
     /// (`Game::animation_time`): what turns `spin` parts.
     pub(super) fn native_draw_animation_time(&self, draw: &BlockEntityDraw) -> f64 {
         draw.animation
+    }
+    /// Whether this is a block entity in a screen scene (`draw_scene`), not in a level.
+    pub(super) fn native_draw_in_scene(&self, draw: &BlockEntityDraw) -> bool {
+        draw.in_scene
     }
     /// The light the helpers draw with: the block's own
     /// (`LevelRenderer.getLightCoords`), 16 times sky light in bits 0..8 and
@@ -1426,6 +1439,7 @@ mod tests {
             prepared: false,
             records: Vec::new(),
             glint: false,
+            in_scene: false,
         }
     }
 

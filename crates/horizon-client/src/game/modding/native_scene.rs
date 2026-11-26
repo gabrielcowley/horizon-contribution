@@ -334,12 +334,17 @@ impl Game<'_> {
     /// the scene is seen and sorted (a living scene's entities and particles,
     /// `native_scene_live`). Nothing is drawn when a quad seen through the
     /// view isn't finite. API 422.
+    ///
+    /// With a `clock` (the scene's tick and partial tick), every block entity
+    /// is posed on it instead, a `kept` ticking copy drawn in place of its
+    /// seed, and each knows it is drawn in a scene.
     pub(super) fn draw_scene_quads(
         &self,
         batch: &mut HudBatch,
         blocks: &SceneBlocks<'_, '_>,
         frame: SceneFrame,
-        animation: Option<(u64, f32, &[LiveBlockEntity])>,
+        clock: Option<(u64, f32)>,
+        kept: &[LiveBlockEntity],
         extra: impl FnOnce(&mut Vec<SceneQuad>),
     ) -> Result<(), mod_api::SceneError> {
         let SceneFrame {
@@ -368,7 +373,6 @@ impl Game<'_> {
         let grass = self.pack.item_renderer.grass_color(0.5, 1.0) as u32;
         let tables = &self.pack.context.tables;
         let mut quads = Vec::new();
-        let (tick, partial, kept) = animation.unwrap_or((0, 0.0, &[]));
         let mut kept = kept.iter().peekable();
         for (i, (block, group, transform)) in blocks.iter().enumerate() {
             let ticking = if kept.peek().is_some_and(|entry| entry.index == i) {
@@ -434,24 +438,25 @@ impl Game<'_> {
             }
             if let Some(seed) = block.entity {
                 let original;
-                let (entity, partial, game_time, animation_time) =
-                    if let Some((_, entity)) = ticking {
-                        (
-                            entity,
-                            partial,
-                            i64::try_from(tick).unwrap_or(i64::MAX),
-                            tick as f64 + f64::from(partial),
-                        )
-                    } else {
-                        original =
-                            mod_api::ModBlockEntity::new(seed.id.to_string(), seed.fields.clone());
-                        (
-                            &original,
-                            self.clock.fraction() as f32,
-                            self.world.game_time,
-                            self.animation_time(),
-                        )
-                    };
+                let entity = if let Some((_, entity)) = ticking {
+                    entity
+                } else {
+                    original =
+                        mod_api::ModBlockEntity::new(seed.id.to_string(), seed.fields.clone());
+                    &original
+                };
+                let (partial, game_time, animation_time) = match clock {
+                    Some((tick, partial)) => (
+                        partial,
+                        i64::try_from(tick).unwrap_or(i64::MAX),
+                        tick as f64 + f64::from(partial),
+                    ),
+                    None => (
+                        self.clock.fraction() as f32,
+                        self.world.game_time,
+                        self.animation_time(),
+                    ),
+                };
                 let name = &*self.res.facts().get(block.state).name;
                 let mut draw = BlockEntityDraw::posed(
                     partial,
@@ -462,7 +467,8 @@ impl Game<'_> {
                     diffuse_lights(false),
                     Vec::new(),
                 )
-                .animated(animation_time);
+                .animated(animation_time)
+                .in_scene();
                 self.native_block_entity_submit(block.pos, name, block.state, entity, &mut draw);
                 // Its text's new glyphs upload with this screen's batch.
                 batch.patches.append(&mut self.text_patches.borrow_mut());
@@ -557,6 +563,21 @@ mod tests {
 
     fn view(yaw: f32, pitch: f32) -> SceneView {
         SceneView::new([0.5, 0.5, 0.5], yaw, pitch, 20.0)
+    }
+
+    /// The projection mods compute themselves is the one the scene is drawn with.
+    #[test]
+    fn scene_view_to_gui_is_the_drawn_transform() {
+        let rect = [10.0, 20.0, 110.0, 80.0];
+        for (yaw, pitch) in [(0.0, 0.0), (30.0, 25.0), (-135.0, 60.0), (210.0, -10.0)] {
+            let view = SceneView::new([2.0, -1.0, 3.5], yaw, pitch, 16.0);
+            let m = scene_matrix(rect, view);
+            for point in [[0.0; 3], [2.0, -1.0, 3.5], [4.5, 7.0, -2.25]] {
+                let drawn = m.transform_point3(Vec3::from_array(point));
+                let computed = Vec3::from_array(view.to_gui(rect, point));
+                assert!(drawn.abs_diff_eq(computed, 1e-3), "{yaw} {pitch} {point:?}");
+            }
+        }
     }
 
     /// Unturned, the scene is seen from the north as a player at yaw 0 sees

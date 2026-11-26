@@ -1,0 +1,3 @@
+ids = ["method:SceneView::to_gui", "method:SceneView::ray_from_gui", "method:BlockEntityDrawContext::in_scene"]
+why = "A scene with a clock poses every block entity on that clock, not only the types with a native scene ticker, so a paused or scrubbed scene holds or moves wasm and native block entities alike. A block entity renderer can tell it draws in a screen scene, and a mod can point at a scene point, or pick one, with the same projection draw_scene uses, computed without a host call."
+migrate = "Additive. A block entity in a scene without a clock is drawn on the client's clock as before. A clocked scene whose partial isn't finite is refused with BadClock even when it has no entities or particles."

@@ -2,6 +2,10 @@
 
 use crate::{BlockState, Identifier, item::containers::ModBlockEntityFields};
 
+#[cfg(test)]
+#[path = "scene_view_tests.rs"]
+mod scene_view_tests;
+
 /// A mod block entity's type and public fields supplied to a screen's drawing Part.
 /// This is not a live entity: internal cache and revision identities never cross the API.
 /// With a scene clock and a native scene ticker registered for this type, these values
@@ -70,6 +74,40 @@ impl SceneView {
             pitch,
             scale,
         }
+    }
+
+    /// Where the scene point `point` (in blocks) is drawn in the box `rect`
+    /// (x0, y0, x1, y1, GUI pixels) that `draw_scene` draws this view in: GUI x and y,
+    /// and z, how far towards the viewer it lies, in GUI pixels from the view's center.
+    /// Use it to point text or a control at a block. It is the same transform
+    /// `draw_scene` uses, computed here, with no host call. Section poses are not
+    /// applied: pass a point already moved by its section.
+    pub fn to_gui(&self, rect: [f32; 4], point: [f32; 3]) -> [f32; 3] {
+        let middle = glam::Vec3::new((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0, 0.0);
+        let local = glam::Vec3::from_array(point) - glam::Vec3::from_array(self.center);
+        (middle - (self.turn() * local) * self.scale).to_array()
+    }
+
+    /// The scene ray seen through the GUI point `gui` in the box `rect`: `to_gui`'s
+    /// inverse. `origin` is the scene point drawn at `gui` level with the view's center
+    /// (GUI z 0), and `direction`, a unit vector, points away from the viewer into the
+    /// scene. The view is orthographic, so every ray has the same direction. Cast it
+    /// through a section's inverse pose to pick that section's blocks. Not finite for a
+    /// view `draw_scene` refuses (a scale that isn't finite and positive).
+    pub fn ray_from_gui(&self, rect: [f32; 4], gui: [f32; 2]) -> ([f32; 3], [f32; 3]) {
+        let middle = glam::Vec2::new((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+        let offset = (glam::Vec2::from_array(gui) - middle).extend(0.0);
+        let back = self.turn().inverse();
+        let origin = glam::Vec3::from_array(self.center) - back * offset / self.scale;
+        (origin.to_array(), (back * glam::Vec3::Z).to_array())
+    }
+
+    /// The view's turn: yaw about the scene's up, then the top tilted towards the
+    /// viewer. The callers negate the scale, the point reflection that keeps the
+    /// picture unmirrored with the GUI's y running down.
+    fn turn(&self) -> glam::Quat {
+        glam::Quat::from_rotation_x(-self.pitch.to_radians())
+            * glam::Quat::from_rotation_y(self.yaw.to_radians())
     }
 }
 
@@ -144,6 +182,9 @@ impl SceneParticle {
 /// ticking copies, clears particles and runs only the last [`SCENE_CATCH_UP`] ticks. The
 /// same tick again does not run anything. A tick behind the last one, or changed scene
 /// inputs, starts the scene over. Each tick's randomness is seeded from `id` and `tick`.
+/// Every block entity in the scene is drawn on this clock, ticking or not: its
+/// `partial` is `partial`, its `game_time` is `tick` and its `animation_time` is
+/// `tick + partial`, so holding the tick holds its `spin` parts and moving it moves them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
@@ -270,7 +311,8 @@ pub struct Scene {
     pub entities: Vec<SceneEntity>,
     /// Particles to add at the clock's next tick; they need a clock.
     pub particles: Vec<SceneParticle>,
-    /// The scene's clock, for a scene that lives.
+    /// The scene's clock, for a scene that lives, and the time its block entities are
+    /// drawn at. Without one they are drawn on the client's clock.
     pub clock: Option<SceneClock>,
 }
 
