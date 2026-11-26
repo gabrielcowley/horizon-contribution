@@ -1095,12 +1095,14 @@ mod tests {
                     let m = scene_matrix(rect, view);
                     assert!(close(m, stack), "a = {a}, b = {b}, s = {s}");
 
-                    let shift = Mat4::from_rotation_x((-35.0f32).to_radians())
-                        .transform_vector3(Mat4::from_rotation_y(55.0f32.to_radians())
-                            .transform_vector3(Vec3::new(-40.0, 0.0, 0.0)));
+                    let shift = Mat4::from_rotation_x((-35.0f32).to_radians()).transform_vector3(
+                        Mat4::from_rotation_y(55.0f32.to_radians())
+                            .transform_vector3(Vec3::new(-40.0, 0.0, 0.0)),
+                    );
                     let linear = glam::Mat3::from_mat4(m);
                     let moved = center - linear.inverse() * shift;
-                    let slid = scene_matrix(rect, SceneView::new(moved.to_array(), b + 180.0, -a, s));
+                    let slid =
+                        scene_matrix(rect, SceneView::new(moved.to_array(), b + 180.0, -a, s));
                     assert!(
                         close(slid, Mat4::from_translation(shift) * stack),
                         "slid: a = {a}, b = {b}, s = {s}"
