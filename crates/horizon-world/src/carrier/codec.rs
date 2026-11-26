@@ -20,8 +20,7 @@
 
 use super::contact::RigidTransform;
 use super::model::{
-    Carrier, Cell, Invalid, LocalPos, MAX_CARRIER_DATA_BYTES, MAX_CELLS, MAX_LOCAL_COORD,
-    MIN_LOCAL_COORD, stored_transform,
+    Carrier, Cell, Invalid, LocalPos, MAX_CARRIER_DATA_BYTES, MAX_CELLS, stored_transform,
 };
 use horizon_core::nbt::{self, Compound, JavaString, Limits, NamedTag, Tag};
 use std::fmt;
@@ -258,13 +257,9 @@ pub fn decode(bytes: &[u8]) -> Result<Carrier, CodecError> {
         };
         check_cell_keys(&cell_map)?;
         let pos = position_field(&cell_map)?;
-        let mut axes = [0_i8; 3];
-        for (axis, &value) in pos.iter().enumerate() {
-            if !(MIN_LOCAL_COORD..=MAX_LOCAL_COORD).contains(&value) {
-                return Err(CodecError::Invalid(Invalid::Coordinate { value }));
-            }
-            axes[axis] = value as i8;
-        }
+        // The model's constructor checks each stored `i32` against the
+        // local range before it narrows.
+        let pos = LocalPos::new(pos[0], pos[1], pos[2]).map_err(CodecError::Invalid)?;
         let name = string_field(&cell_map, "state")?;
         let properties = decode_properties(&mut cell_map)?;
         let data = match cell_map.remove(&JavaString::from("data")) {
@@ -282,15 +277,7 @@ pub fn decode(bytes: &[u8]) -> Result<Carrier, CodecError> {
             Some(_) => return Err(malformed("data is not a byte array")),
             None => None,
         };
-        cells.push(
-            Cell::new(
-                LocalPos::new(axes[0], axes[1], axes[2]),
-                &name,
-                properties,
-                data,
-            )
-            .map_err(CodecError::Invalid)?,
-        );
+        cells.push(Cell::new(pos, &name, properties, data).map_err(CodecError::Invalid)?);
     }
     // Sorting and duplicate detection happen once, in the model; the
     // file may list cells in any order.

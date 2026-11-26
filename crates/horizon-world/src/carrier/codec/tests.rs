@@ -2,16 +2,17 @@ use super::*;
 use crate::carrier::contact::{RigidTransform, Rotation};
 use horizon_core::geometry::Vec3;
 
-/// Distinct positions for up to `count` cells, drawn from the i8
-/// cube in a deterministic spread.
+/// Distinct positions for up to `count` cells, in a deterministic
+/// spread around the local origin.
 fn positions(count: usize) -> Vec<LocalPos> {
     (0..count)
         .map(|i| {
             LocalPos::new(
-                ((i % 256) as i32 - 128) as i8,
-                ((i / 256) % 64) as i8 - 32,
-                ((i / 16_384) % 64) as i8 - 32,
+                (i % 256) as i32 - 128,
+                ((i / 256) % 64) as i32 - 32,
+                ((i / 16_384) % 64) as i32 - 32,
             )
+            .unwrap()
         })
         .collect()
 }
@@ -31,9 +32,15 @@ fn sample_carrier() -> Carrier {
         1 << 40,
         transform,
         vec![
-            Cell::new(LocalPos::new(1, 2, 3), "minecraft:stone", Vec::new(), None).unwrap(),
             Cell::new(
-                LocalPos::new(-4, 5, -6),
+                LocalPos::new(1, 2, 3).unwrap(),
+                "minecraft:stone",
+                Vec::new(),
+                None,
+            )
+            .unwrap(),
+            Cell::new(
+                LocalPos::new(-4, 5, -6).unwrap(),
                 "minecraft:furnace",
                 vec![("facing".to_string(), "south".to_string())],
                 Some(vec![7, 8, 9]),
@@ -41,7 +48,7 @@ fn sample_carrier() -> Carrier {
             .unwrap(),
             // An empty payload is Some, distinct from None.
             Cell::new(
-                LocalPos::new(9, 9, 9),
+                LocalPos::new(9, 9, 9).unwrap(),
                 "minecraft:chest",
                 Vec::new(),
                 Some(vec![]),
@@ -197,10 +204,16 @@ fn accepts_exactly_the_cell_limit_and_refuses_one_more() {
 #[test]
 fn accepts_boundary_coordinates_and_refuses_past_them() {
     let base = sample_carrier();
+    // Literal bounds: changing the constants must fail this test. The
+    // cells at the old `i8` extremes are what a carrier file written
+    // before the range widened holds at most; the stored schema (three
+    // `i32`s) is unchanged, so such a file still loads.
     let boundary = rewrite(&encode(&base).unwrap(), |map| {
         map.insert(
             "cells".into(),
             cells_tag(vec![
+                cell_tag(8191, -8192, 8191, "minecraft:stone", None),
+                cell_tag(-8192, 8191, -8192, "minecraft:stone", None),
                 cell_tag(127, -128, 127, "minecraft:stone", None),
                 cell_tag(-128, 127, -128, "minecraft:stone", None),
             ]),
@@ -211,11 +224,15 @@ fn accepts_boundary_coordinates_and_refuses_past_them() {
     assert_eq!(
         decoded.cells().iter().map(Cell::pos).collect::<Vec<_>>(),
         vec![
-            LocalPos::new(-128, 127, -128),
-            LocalPos::new(127, -128, 127)
+            LocalPos::new(-8192, 8191, -8192).unwrap(),
+            LocalPos::new(-128, 127, -128).unwrap(),
+            LocalPos::new(127, -128, 127).unwrap(),
+            LocalPos::new(8191, -8192, 8191).unwrap(),
         ]
     );
-    for value in [128_i32, -129] {
+    // Round trip at the bounds.
+    assert_eq!(decode(&encode(&decoded).unwrap()).unwrap(), decoded);
+    for value in [8192_i32, -8193, i32::MAX, i32::MIN] {
         let bytes = rewrite(&boundary, |map| {
             map.insert(
                 "cells".into(),
@@ -484,7 +501,7 @@ fn long_legal_property_names_round_trip() {
         RigidTransform::identity_at(Vec3::ZERO).unwrap(),
         vec![
             Cell::new(
-                LocalPos::new(0, 0, 0),
+                LocalPos::new(0, 0, 0).unwrap(),
                 "minecraft:stone",
                 vec![
                     ("a".repeat(65), "b".repeat(66)),
@@ -516,7 +533,7 @@ fn state_strings_round_trip_at_the_nbt_limit_and_refuse_one_past() {
         RigidTransform::identity_at(Vec3::ZERO).unwrap(),
         vec![
             Cell::new(
-                LocalPos::new(0, 0, 0),
+                LocalPos::new(0, 0, 0).unwrap(),
                 &format!("m:{}", "p".repeat(65_533)),
                 vec![("k".repeat(65_535), "v".repeat(65_535))],
                 None,
@@ -532,7 +549,12 @@ fn state_strings_round_trip_at_the_nbt_limit_and_refuse_one_past() {
     assert_eq!(decoded.cells()[0].properties()[0].1.len(), 65_535);
 
     let cell = |name: &str, key: String, value: String| {
-        Cell::new(LocalPos::new(0, 0, 0), name, vec![(key, value)], None)
+        Cell::new(
+            LocalPos::new(0, 0, 0).unwrap(),
+            name,
+            vec![(key, value)],
+            None,
+        )
     };
     assert_eq!(
         cell("minecraft:stone", "k".to_string(), "v".repeat(65_536)),
@@ -598,7 +620,7 @@ fn properties_round_trip_sorted_regardless_of_file_order() {
         RigidTransform::identity_at(Vec3::ZERO).unwrap(),
         vec![
             Cell::new(
-                LocalPos::new(0, 0, 0),
+                LocalPos::new(0, 0, 0).unwrap(),
                 "minecraft:oak_stairs",
                 shuffled,
                 None,

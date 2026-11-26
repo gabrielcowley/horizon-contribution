@@ -8,7 +8,7 @@ use crate::carrier_store::{
     MAX_OP_COMPRESSED, MAX_OP_DECODED, MAX_OP_ENTITIES, OpError, OpKind, Opened, Operation,
     OperationCell, Refusal, SLOTS, StateValidator, Store, decode_operation, encode_operation,
 };
-use horizon_core::nbt::{self, Tag};
+use horizon_core::nbt::{self, Compound, Tag};
 use std::{fs, path::PathBuf};
 
 /// A throwaway world root with a `data/` folder, removed on drop.
@@ -118,7 +118,8 @@ fn sample_operation(op_id: u64, cells: usize, fill: usize) -> Operation {
         cells: (0..cells)
             .map(|i| OperationCell {
                 world: [i as i32, 64, -(i as i32)],
-                local: [((i % 256) as i32 - 128) as i8, 0, 0],
+                // Spread over the whole local range, both ends included.
+                local: [(i as i32 % 16_384 - 8192) as i16, 8191, -8192],
                 before: crate::carrier_store::CellImage {
                     name: "minecraft:chest".to_string(),
                     properties: vec![("facing".to_string(), "north".to_string())],
@@ -523,6 +524,78 @@ fn operation_files_round_trip_exactly() {
     assert_eq!(
         decode_operation(&encoded, &NoStatesKnown),
         Err(OpError::UnknownState)
+    );
+}
+
+/// An operation file left by a crash under a build that wrote version 1
+/// (`local` as a three-byte `ByteArray`) still reads, so recovery can
+/// finish it; and each version reads only its own `local` shape.
+#[test]
+fn a_version_1_operation_still_reads() {
+    let world = WorldDir::new("op-version-1");
+    let mut operation = sample_operation(4, 2, 8);
+    operation.cells[0].local = [-128, 0, 127];
+    operation.cells[1].local = [5, -3, 0];
+    let encoded = encode_operation(&operation).unwrap();
+    let (root, _) = nbt::read_named(
+        &horizon_world::compression::Compression::Gzip
+            .decode(&encoded, 1 << 24)
+            .unwrap(),
+        nbt::Limits::saved(),
+    )
+    .unwrap();
+    let Tag::Compound(mut map) = root.tag else {
+        unreachable!();
+    };
+    let rewrite = |map: &Compound, version: i32, bytes: bool| -> Vec<u8> {
+        let mut map = map.clone();
+        map.insert("version".into(), Tag::Int(version));
+        if let Some(Tag::List(cells)) = map.get_mut(&"cells".into()) {
+            for cell in cells {
+                let Tag::Compound(cell) = cell else {
+                    unreachable!();
+                };
+                if bytes {
+                    let Some(Tag::IntArray(local)) = cell.get(&"local".into()).cloned() else {
+                        unreachable!();
+                    };
+                    cell.insert(
+                        "local".into(),
+                        Tag::ByteArray(local.iter().map(|v| *v as i8 as u8).collect()),
+                    );
+                }
+            }
+        }
+        let path = world.data().join("rewritten.dat");
+        crate::save::write_dat(&path, Tag::Compound(map)).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        bytes
+    };
+    // Version 1 with byte locals: the same operation.
+    assert_eq!(
+        decode_operation(&rewrite(&map, 1, true), &AllStatesKnown),
+        Ok(operation.clone())
+    );
+    // Each version's shape only.
+    for (version, bytes) in [(1, false), (2, true)] {
+        assert_eq!(
+            decode_operation(&rewrite(&map, version, bytes), &AllStatesKnown),
+            Err(OpError::Malformed(
+                "local is not the three-element array its operation version stores"
+            )),
+            "version {version}"
+        );
+    }
+    // A version 2 local past the range refuses rather than wrapping.
+    if let Some(Tag::List(cells)) = map.get_mut(&"cells".into())
+        && let Some(Tag::Compound(cell)) = cells.first_mut()
+    {
+        cell.insert("local".into(), Tag::IntArray(vec![8192, 0, 0]));
+    }
+    assert_eq!(
+        decode_operation(&rewrite(&map, 2, false), &AllStatesKnown),
+        Err(OpError::Malformed("local is outside the local range"))
     );
 }
 

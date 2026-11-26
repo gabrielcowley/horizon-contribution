@@ -65,8 +65,12 @@ const SLOT_HEADER: usize = 4 + 2 + 8 + 4 + 4;
 const SLOT_MAGIC: [u8; 4] = *b"HCJS";
 /// The slot schema this build writes.
 const SLOT_VERSION: u16 = 1;
-/// The operation-file schema this build writes.
-const OP_VERSION: i32 = 1;
+/// The operation-file schema this build writes. Version 2 stores each
+/// cell's `local` as a three-int `IntArray`, for the local range
+/// −8,192..8,191; version 1 stored it as a three-byte `ByteArray`. An
+/// operation file lives only from `prepared` to `committed`, but one left
+/// by a crash under the older build is still read, so recovery finishes it.
+const OP_VERSION: i32 = 2;
 /// The node budget for one operation file: the exact schema shape never
 /// needs more than a handful of nodes per cell.
 const MAX_OP_NODES: usize = 10 * MAX_OP_CELLS;
@@ -1610,8 +1614,10 @@ impl StateValidator for AllStatesKnown {
 pub struct OperationCell {
     /// The world cell the transfer touches.
     pub world: [i32; 3],
-    /// The carrier-local cell it maps to.
-    pub local: [i8; 3],
+    /// The carrier-local cell it maps to, within
+    /// [`horizon_world::carrier::model::MIN_LOCAL_COORD`]..=
+    /// [`horizon_world::carrier::model::MAX_LOCAL_COORD`].
+    pub local: [i16; 3],
     /// The cell before the transfer.
     pub before: CellImage,
     /// The cell after the transfer.
@@ -1834,7 +1840,8 @@ pub fn decode_operation(bytes: &[u8], states: &dyn StateValidator) -> Result<Ope
             _ => Err(OpError::Malformed(leak_key(key))),
         }
     };
-    if int("version")? != OP_VERSION {
+    let version = int("version")?;
+    if !(1..=OP_VERSION).contains(&version) {
         return Err(OpError::Malformed("unsupported operation version"));
     }
     let kind = match root.get("kind") {
@@ -1876,9 +1883,19 @@ pub fn decode_operation(bytes: &[u8], states: &dyn StateValidator) -> Result<Ope
             Some(Tag::IntArray(values)) if values.len() == 3 => [values[0], values[1], values[2]],
             _ => return Err(OpError::Malformed(leak_key("world"))),
         };
-        let local = match cell_map.get(&"local".into()) {
-            Some(Tag::ByteArray(values)) if values.len() == 3 => {
-                [values[0] as i8, values[1] as i8, values[2] as i8]
+        // Each version reads only its own shape; the wide range is
+        // checked before the values narrow.
+        let local = match (version, cell_map.get(&"local".into())) {
+            (1, Some(Tag::ByteArray(values))) if values.len() == 3 => [
+                i16::from(values[0] as i8),
+                i16::from(values[1] as i8),
+                i16::from(values[2] as i8),
+            ],
+            (2, Some(Tag::IntArray(values))) if values.len() == 3 => {
+                let pos =
+                    horizon_world::carrier::model::LocalPos::new(values[0], values[1], values[2])
+                        .map_err(|_| OpError::Malformed("local is outside the local range"))?;
+                [pos.x(), pos.y(), pos.z()]
             }
             _ => return Err(OpError::Malformed(leak_key("local"))),
         };
@@ -2004,10 +2021,10 @@ fn operation_tag(operation: &Operation) -> Tag {
                 ),
                 (
                     "local",
-                    Tag::ByteArray(vec![
-                        cell.local[0] as u8,
-                        cell.local[1] as u8,
-                        cell.local[2] as u8,
+                    Tag::IntArray(vec![
+                        i32::from(cell.local[0]),
+                        i32::from(cell.local[1]),
+                        i32::from(cell.local[2]),
                     ]),
                 ),
                 ("before", image(&cell.before)),
@@ -2050,7 +2067,7 @@ fn leak_key(key: &str) -> &'static str {
         "dimension" => "dimension is not a string",
         "cells" => "cells is not a list",
         "world" => "world is not three ints",
-        "local" => "local is not three bytes",
+        "local" => "local is not the three-element array its operation version stores",
         "state" => "state is not a string",
         "properties" => "properties is not a compound",
         "entity" => "entity is not an NBT tag",

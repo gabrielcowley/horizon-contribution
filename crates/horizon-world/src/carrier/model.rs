@@ -13,9 +13,9 @@
 //! trust boundary"), all checked before allocation and refusing rather
 //! than clamping:
 //! - at most [`MAX_CELLS`] non-air cells;
-//! - local coordinates −128..127, inherent in the `i8` axes of
-//!   [`LocalPos`] (the codec checks the range when narrowing stored `i32`
-//!   values);
+//! - local coordinates −8,192..8,191 ([`MIN_LOCAL_COORD`] and
+//!   [`MAX_LOCAL_COORD`]), checked by [`LocalPos::new`], the only way to
+//!   build one;
 //! - at most [`MAX_CELL_DATA_BYTES`] decoded block-entity payload bytes
 //!   per cell and [`MAX_CARRIER_DATA_BYTES`] per carrier;
 //! - no duplicate cells, no NaN/infinity, no zero quaternion, no
@@ -36,11 +36,14 @@ pub const MAX_CELL_DATA_BYTES: usize = 64 * 1024;
 /// Design trust-boundary limit: at most 16 MiB of decoded block-entity
 /// payload bytes per carrier.
 pub const MAX_CARRIER_DATA_BYTES: usize = 16 * 1024 * 1024;
-/// Inclusive local coordinate bounds; equal to the `i8` range carried by
-/// [`LocalPos`].
-pub const MIN_LOCAL_COORD: i32 = -128;
+/// Inclusive local coordinate bounds: −8,192..8,191, a span of twice
+/// [`MAX_CELLS`]. Any face-connected structure within the cell cap fits
+/// whichever of its cells, or a block next to one, is the local origin,
+/// while a carrier's extent stays bounded as a trust limit. The cell cap,
+/// not the extent, bounds the contact kernel's and the store's work.
+pub const MIN_LOCAL_COORD: i32 = -8192;
 /// See [`MIN_LOCAL_COORD`].
-pub const MAX_LOCAL_COORD: i32 = 127;
+pub const MAX_LOCAL_COORD: i32 = 8191;
 /// The block-declaration boundary (`BlockDefinition::new`,
 /// `horizon-mod-runtime/src/block_definitions.rs`) bounds neither the
 /// number of properties nor the length of any name or value, and neither
@@ -81,9 +84,9 @@ pub enum Invalid {
         /// The offending cell count.
         count: usize,
     },
-    /// A stored local coordinate outside −128..127.
+    /// A local coordinate outside [`MIN_LOCAL_COORD`]..=[`MAX_LOCAL_COORD`].
     Coordinate {
-        /// The offending value before narrowing to `i8`.
+        /// The offending value before narrowing to `i16`.
         value: i32,
     },
     /// Two cells at the same local position.
@@ -124,7 +127,10 @@ impl fmt::Display for Invalid {
             Self::QuaternionNotCanonical => write!(f, "quaternion is not canonical"),
             Self::CellCount { count } => write!(f, "{count} cells exceeds {MAX_CELLS}"),
             Self::Coordinate { value } => {
-                write!(f, "local coordinate {value} outside -128..127")
+                write!(
+                    f,
+                    "local coordinate {value} outside {MIN_LOCAL_COORD}..{MAX_LOCAL_COORD}"
+                )
             }
             Self::DuplicateCell => write!(f, "duplicate local cell"),
             Self::CellData { len } => write!(
@@ -148,30 +154,46 @@ impl fmt::Display for Invalid {
 }
 impl std::error::Error for Invalid {}
 
-/// A local cell position. The `i8` axes make the design's −128..127 local
-/// coordinate limit inherent to the type; ordered `(x, y, z)` for the
-/// carrier's sorted cell storage.
+/// A local cell position, each axis within
+/// [`MIN_LOCAL_COORD`]..=[`MAX_LOCAL_COORD`] and stored as `i16`; ordered
+/// `(x, y, z)` for the carrier's sorted cell storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LocalPos {
-    x: i8,
-    y: i8,
-    z: i8,
+    x: i16,
+    y: i16,
+    z: i16,
 }
 impl LocalPos {
-    /// A position from `i8` axes.
-    pub const fn new(x: i8, y: i8, z: i8) -> Self {
-        Self { x, y, z }
+    /// A position from three axes, refusing any axis outside
+    /// [`MIN_LOCAL_COORD`]..=[`MAX_LOCAL_COORD`] with
+    /// [`Invalid::Coordinate`]. Taking `i32` lets callers holding world
+    /// offsets or stored values check before they narrow.
+    pub const fn new(x: i32, y: i32, z: i32) -> Result<Self, Invalid> {
+        // `const` rules out iterators; the axes are checked in order.
+        let axes = [x, y, z];
+        let mut i = 0;
+        while i < 3 {
+            if axes[i] < MIN_LOCAL_COORD || axes[i] > MAX_LOCAL_COORD {
+                return Err(Invalid::Coordinate { value: axes[i] });
+            }
+            i += 1;
+        }
+        Ok(Self {
+            x: x as i16,
+            y: y as i16,
+            z: z as i16,
+        })
     }
     /// The local X axis.
-    pub const fn x(self) -> i8 {
+    pub const fn x(self) -> i16 {
         self.x
     }
     /// The local Y axis.
-    pub const fn y(self) -> i8 {
+    pub const fn y(self) -> i16 {
         self.y
     }
     /// The local Z axis.
-    pub const fn z(self) -> i8 {
+    pub const fn z(self) -> i16 {
         self.z
     }
 }
@@ -436,9 +458,9 @@ mod tests {
             0,
             identity_transform(),
             vec![
-                stone(LocalPos::new(5, 0, 0)),
-                stone(LocalPos::new(-5, 3, 2)),
-                stone(LocalPos::new(0, 0, 0)),
+                stone(LocalPos::new(5, 0, 0).unwrap()),
+                stone(LocalPos::new(-5, 3, 2).unwrap()),
+                stone(LocalPos::new(0, 0, 0).unwrap()),
             ],
         )
         .unwrap();
@@ -446,9 +468,9 @@ mod tests {
         assert_eq!(
             positions,
             vec![
-                LocalPos::new(-5, 3, 2),
-                LocalPos::new(0, 0, 0),
-                LocalPos::new(5, 0, 0)
+                LocalPos::new(-5, 3, 2).unwrap(),
+                LocalPos::new(0, 0, 0).unwrap(),
+                LocalPos::new(5, 0, 0).unwrap()
             ]
         );
         assert_eq!(
@@ -457,10 +479,30 @@ mod tests {
                 0,
                 0,
                 identity_transform(),
-                vec![stone(LocalPos::new(1, 1, 1)), stone(LocalPos::new(1, 1, 1))],
+                vec![
+                    stone(LocalPos::new(1, 1, 1).unwrap()),
+                    stone(LocalPos::new(1, 1, 1).unwrap())
+                ],
             ),
             Err(Invalid::DuplicateCell)
         );
+    }
+
+    #[test]
+    fn local_positions_hold_the_wide_range_and_refuse_past_it() {
+        // Literal bounds: changing the constants must fail this test.
+        let low = LocalPos::new(-8192, -8192, -8192).unwrap();
+        let high = LocalPos::new(8191, 8191, 8191).unwrap();
+        assert_eq!([low.x(), low.y(), low.z()], [-8192; 3]);
+        assert_eq!([high.x(), high.y(), high.z()], [8191; 3]);
+        for (x, y, z, value) in [
+            (8192, 0, 0, 8192),
+            (0, -8193, 0, -8193),
+            (0, 0, i32::MAX, i32::MAX),
+            (0, 0, i32::MIN, i32::MIN),
+        ] {
+            assert_eq!(LocalPos::new(x, y, z), Err(Invalid::Coordinate { value }));
+        }
     }
 
     #[test]
@@ -473,20 +515,20 @@ mod tests {
             "Minecraft:Stone", // uppercase
         ] {
             assert_eq!(
-                Cell::new(LocalPos::new(0, 0, 0), state, Vec::new(), None),
+                Cell::new(LocalPos::new(0, 0, 0).unwrap(), state, Vec::new(), None),
                 Err(Invalid::BlockName),
                 "{state:?}"
             );
         }
         for air in AIR_STATES {
             assert_eq!(
-                Cell::new(LocalPos::new(0, 0, 0), air, Vec::new(), None),
+                Cell::new(LocalPos::new(0, 0, 0).unwrap(), air, Vec::new(), None),
                 Err(Invalid::AirCell)
             );
             // Properties do not smuggle air in either.
             assert_eq!(
                 Cell::new(
-                    LocalPos::new(0, 0, 0),
+                    LocalPos::new(0, 0, 0).unwrap(),
                     air,
                     vec![("facing".to_string(), "north".to_string())],
                     None
@@ -498,7 +540,7 @@ mod tests {
         // charset nor the declaration boundary bounds its length.
         let long = format!("minecraft:{}", "a".repeat(1015));
         assert_eq!(long.len(), 1025);
-        assert!(Cell::new(LocalPos::new(0, 0, 0), &long, Vec::new(), None).is_ok());
+        assert!(Cell::new(LocalPos::new(0, 0, 0).unwrap(), &long, Vec::new(), None).is_ok());
     }
 
     #[test]
@@ -506,7 +548,7 @@ mod tests {
         // Literal bounds: changing the constant must fail this test.
         assert!(
             Cell::new(
-                LocalPos::new(0, 0, 0),
+                LocalPos::new(0, 0, 0).unwrap(),
                 "minecraft:stone",
                 Vec::new(),
                 Some(vec![0; 65536])
@@ -515,7 +557,7 @@ mod tests {
         );
         assert_eq!(
             Cell::new(
-                LocalPos::new(0, 0, 0),
+                LocalPos::new(0, 0, 0).unwrap(),
                 "minecraft:stone",
                 Vec::new(),
                 Some(vec![0; 65537])
@@ -527,23 +569,11 @@ mod tests {
     #[test]
     fn carrier_cell_count_limit_is_checked_before_allocation() {
         let cells = (0..4096)
-            .map(|i| {
-                stone(LocalPos::new(
-                    (i % 256 - 128) as i8,
-                    (i / 256 - 8) as i8,
-                    (i / 1024 - 4) as i8,
-                ))
-            })
+            .map(|i| stone(LocalPos::new(i % 256 - 128, i / 256 - 8, i / 1024 - 4).unwrap()))
             .collect();
         assert!(Carrier::new(1, 0, 0, identity_transform(), cells).is_ok());
         let over = (0..4097)
-            .map(|i| {
-                stone(LocalPos::new(
-                    (i % 256 - 128) as i8,
-                    (i / 256 - 8) as i8,
-                    (i / 1024 - 4) as i8,
-                ))
-            })
+            .map(|i| stone(LocalPos::new(i % 256 - 128, i / 256 - 8, i / 1024 - 4).unwrap()))
             .collect::<Vec<_>>();
         assert_eq!(
             Carrier::new(1, 0, 0, identity_transform(), over),
@@ -557,7 +587,7 @@ mod tests {
         let full = (0..256)
             .map(|i| {
                 Cell::new(
-                    LocalPos::new(i as i8, 0, 0),
+                    LocalPos::new(i, 0, 0).unwrap(),
                     "minecraft:stone",
                     Vec::new(),
                     Some(vec![0; 65536]),
@@ -567,7 +597,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(Carrier::new(1, 0, 0, identity_transform(), full.clone()).is_ok());
         let mut over = full;
-        let mut last = stone(LocalPos::new(127, 127, 127));
+        let mut last = stone(LocalPos::new(127, 127, 127).unwrap());
         last.data = Some(vec![0; 1].into());
         over.push(last);
         assert_eq!(
@@ -588,7 +618,7 @@ mod tests {
     #[test]
     fn properties_are_stored_sorted_regardless_of_input_order() {
         let cell = Cell::new(
-            LocalPos::new(0, 0, 0),
+            LocalPos::new(0, 0, 0).unwrap(),
             "minecraft:oak_stairs",
             oak_stairs_properties(),
             None,
@@ -602,7 +632,7 @@ mod tests {
         assert_eq!(names, ["facing", "half", "shape", "waterlogged"]);
         // The same state built in canonical order is equal.
         let sorted = Cell::new(
-            LocalPos::new(0, 0, 0),
+            LocalPos::new(0, 0, 0).unwrap(),
             "minecraft:oak_stairs",
             vec![
                 ("facing".to_string(), "north".to_string()),
@@ -620,7 +650,7 @@ mod tests {
     fn refuses_bad_property_lists() {
         let cell = |properties: Vec<(String, String)>| {
             Cell::new(
-                LocalPos::new(0, 0, 0),
+                LocalPos::new(0, 0, 0).unwrap(),
                 "minecraft:oak_stairs",
                 properties,
                 None,

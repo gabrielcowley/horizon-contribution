@@ -155,7 +155,16 @@ fn entities_content_equal(live: &horizon_core::nbt::Tag, image: &horizon_core::n
 }
 
 impl Game<'_> {
-    /// Assembles `cells` into one carrier. One synchronous call on the
+    /// Assembles `cells` into one carrier whose local origin is `origin`:
+    /// each cell's local position is its offset from that world block,
+    /// and the carrier is placed there with the identity rotation.
+    /// `None` takes the selection's minimum corner. The origin need not
+    /// be one of the cells, but every offset must fit the local range
+    /// ([`horizon_world::carrier::model::MIN_LOCAL_COORD`]..=
+    /// [`horizon_world::carrier::model::MAX_LOCAL_COORD`]) or the assembly refuses
+    /// with [`TransferError::LocalRange`] before a block is lifted.
+    ///
+    /// One synchronous call on the
     /// server's thread at a tick boundary — no tick runs between
     /// `prepared` and `committed`, which is why routes without their own
     /// fence chokepoint (the player's manual block placement, guest
@@ -179,6 +188,7 @@ impl Game<'_> {
         &mut self,
         uuid: u128,
         cells: &[BlockPos],
+        origin: Option<BlockPos>,
     ) -> Result<(), TransferError> {
         use crate::carrier_store::{CellImage, OpKind, encode_operation, envelope_preflight};
         use crate::carrier_store::{Operation, OperationCell};
@@ -298,18 +308,21 @@ impl Game<'_> {
                 },
             });
         }
-        // Local coordinates derive from the selection's minimum corner
-        // — the pivot — so the input order of `cells` no longer shapes
-        // geometry: a cell's local position is its offset from that
-        // corner, computed with checked arithmetic and checked against
-        // the i8 range before it narrows. The sparse layout survives
-        // (gaps stay gaps), and any selection whose span exceeds the
-        // local range refuses before a block is lifted.
-        let pivot = [
-            cells.iter().map(|p| p.x).min().unwrap_or(0),
-            cells.iter().map(|p| p.y).min().unwrap_or(0),
-            cells.iter().map(|p| p.z).min().unwrap_or(0),
-        ];
+        // Local coordinates derive from the origin — the caller's, or
+        // else the selection's minimum corner — so the input order of
+        // `cells` never shapes geometry: a cell's local position is its
+        // offset from that block, computed with checked arithmetic and
+        // checked against the local range before it narrows. The sparse
+        // layout survives (gaps stay gaps), and any cell whose offset
+        // falls outside the local range refuses before a block is lifted.
+        let pivot = match origin {
+            Some(origin) => [origin.x, origin.y, origin.z],
+            None => [
+                cells.iter().map(|p| p.x).min().unwrap_or(0),
+                cells.iter().map(|p| p.y).min().unwrap_or(0),
+                cells.iter().map(|p| p.z).min().unwrap_or(0),
+            ],
+        };
         for cell in &mut operation_cells {
             let local = [
                 cell.world[0]
@@ -322,13 +335,9 @@ impl Game<'_> {
                     .checked_sub(pivot[2])
                     .ok_or(TransferError::LocalRange)?,
             ];
-            if local
-                .iter()
-                .any(|v| !(i32::from(i8::MIN)..=i32::from(i8::MAX)).contains(v))
-            {
-                return Err(TransferError::LocalRange);
-            }
-            cell.local = [local[0] as i8, local[1] as i8, local[2] as i8];
+            let local = LocalPos::new(local[0], local[1], local[2])
+                .map_err(|_| TransferError::LocalRange)?;
+            cell.local = [local.x(), local.y(), local.z()];
         }
         let carrier_cells = operation_cells
             .iter()
@@ -353,7 +362,12 @@ impl Game<'_> {
                     })
                     .transpose()?;
                 Cell::new(
-                    LocalPos::new(cell.local[0], cell.local[1], cell.local[2]),
+                    LocalPos::new(
+                        i32::from(cell.local[0]),
+                        i32::from(cell.local[1]),
+                        i32::from(cell.local[2]),
+                    )
+                    .map_err(TransferError::Model)?,
                     &cell.before.name,
                     cell.before.properties.clone(),
                     data,
@@ -1072,7 +1086,7 @@ mod tests {
             let air = registry.default_state("minecraft:air").unwrap();
             game.world.set(4, 64, 4, chest).unwrap();
 
-            game.carrier_assemble(7, &[BlockPos::new(4, 64, 4)])
+            game.carrier_assemble(7, &[BlockPos::new(4, 64, 4)], None)
                 .unwrap();
 
             // The cell is air and the fence is lifted.
@@ -1156,7 +1170,7 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn an_empty_assembly_refuses() {
-        with_game(|game| match game.carrier_assemble(51, &[]) {
+        with_game(|game| match game.carrier_assemble(51, &[], None) {
             Err(TransferError::EmptySelection) => {}
             other => panic!("an empty selection must refuse, got {other:?}"),
         });
@@ -1183,7 +1197,7 @@ mod tests {
             let registry = game.pack.assets.registry;
             let chest = registry.default_state("minecraft:chest").unwrap();
             game.world.set(4, 64, 4, chest).unwrap();
-            game.carrier_assemble(52, &[BlockPos::new(4, 64, 4)])
+            game.carrier_assemble(52, &[BlockPos::new(4, 64, 4)], None)
                 .unwrap();
             // A translation that overflows i32 on add refuses.
             match game.carrier_disassemble(52, 1, [i32::MAX, 64, 4], [1.0, 0.0, 0.0, 0.0]) {
@@ -1237,7 +1251,7 @@ mod tests {
                     },
                 ),
             );
-            match game.carrier_assemble(53, &[BlockPos::new(4, 64, 4)]) {
+            match game.carrier_assemble(53, &[BlockPos::new(4, 64, 4)], None) {
                 Err(TransferError::UnsupportedBlock(pos)) => assert_eq!(pos, [4, 64, 4]),
                 other => panic!("a furnace must refuse, got {other:?}"),
             }
@@ -1280,7 +1294,7 @@ mod tests {
             game.world.carrier_fences.capacity_override = Some(8);
             for i in 0..10u32 {
                 game.world.set(4, 64, 4, chest).unwrap();
-                game.carrier_assemble(1000 + i as u128, &[BlockPos::new(4, 64, 4)])
+                game.carrier_assemble(1000 + i as u128, &[BlockPos::new(4, 64, 4)], None)
                     .unwrap_or_else(|e| panic!("cycle {i}: {e}"));
                 game.carrier_disassemble(
                     1000 + i as u128,
@@ -1330,7 +1344,7 @@ mod tests {
             game.world.carrier_fences.capacity_override = Some(0);
             game.world.set(4, 64, 4, chest).unwrap();
             let error = game
-                .carrier_assemble(7, &[BlockPos::new(4, 64, 4)])
+                .carrier_assemble(7, &[BlockPos::new(4, 64, 4)], None)
                 .unwrap_err();
             assert!(error.to_string().contains("CarrierCapacityReopenNeeded"));
             assert_eq!(game.world.block(4, 64, 4), chest);
@@ -1381,7 +1395,7 @@ mod tests {
             );
             spill::put_saved_entity(&mut game.world, [4, 64, 4], tag.clone());
             assert!(matches!(
-                game.carrier_assemble(7, &[BlockPos::new(4, 64, 4)]),
+                game.carrier_assemble(7, &[BlockPos::new(4, 64, 4)], None),
                 Err(TransferError::SavedBlockEntity([4, 64, 4]))
             ));
             assert_eq!(game.world.block(4, 64, 4), chest);
@@ -1392,7 +1406,7 @@ mod tests {
                     .is_none()
             );
             Arc::make_mut(game.world.chunks.get_mut(&(0, 0)).unwrap()).saved = None;
-            game.carrier_assemble(7, &[BlockPos::new(4, 64, 4)])
+            game.carrier_assemble(7, &[BlockPos::new(4, 64, 4)], None)
                 .unwrap();
             spill::put_saved_entity(&mut game.world, [4, 64, 4], tag.clone());
             assert!(matches!(
@@ -1525,7 +1539,7 @@ mod tests {
             let registry = game.pack.assets.registry;
             let chest = registry.default_state("minecraft:chest").unwrap();
             game.world.set(4, 64, 4, chest).unwrap();
-            game.carrier_assemble(61, &[BlockPos::new(4, 64, 4)])
+            game.carrier_assemble(61, &[BlockPos::new(4, 64, 4)], None)
                 .unwrap();
             game.carrier_disassemble(61, 1, [4, 64, 4], [1.0, 0.0, 0.0, 0.0])
                 .unwrap();
@@ -1582,14 +1596,14 @@ mod tests {
                 game.world.set(pos.x, pos.y, pos.z, stone).unwrap();
             }
             // Forward order.
-            game.carrier_assemble(31, &sparse).unwrap();
+            game.carrier_assemble(31, &sparse, None).unwrap();
             let forward =
                 std::fs::read(root.join(format!("data/horizon_carrier_{:032x}-1.nbt", 31_u128)))
                     .unwrap();
             let carrier = codec::decode(&forward).unwrap();
             // Local positions are offsets from the minimum corner (4,64,4):
             // the gaps survive as gaps.
-            let mut locals: Vec<[i8; 3]> = carrier
+            let mut locals: Vec<[i16; 3]> = carrier
                 .cells()
                 .iter()
                 .map(|c| [c.pos().x(), c.pos().y(), c.pos().z()])
@@ -1604,7 +1618,7 @@ mod tests {
             }
             let mut reversed = sparse.to_vec();
             reversed.reverse();
-            game.carrier_assemble(32, &reversed).unwrap();
+            game.carrier_assemble(32, &reversed, None).unwrap();
             let backward =
                 std::fs::read(root.join(format!("data/horizon_carrier_{:032x}-2.nbt", 32_u128)))
                     .unwrap();
@@ -1616,6 +1630,96 @@ mod tests {
                 backward_carrier.cells(),
                 "the geometry is identical regardless of input order"
             );
+        });
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A 4,096-cell straight line — 16 times the old 256-block span —
+    /// assembles with its local origin at one end and again in the
+    /// middle, each cell's local position its offset from that origin;
+    /// an origin that puts a cell past the local range, and one cell
+    /// past the cell cap, both refuse with nothing lifted.
+    #[test]
+    #[ignore = "daily"]
+    fn a_4096_cell_line_assembles_from_an_origin_at_its_end_or_middle() {
+        let root = transfer_root("wide-line");
+        let line: Vec<BlockPos> = (0..4096).map(|x| BlockPos::new(x, 64, 0)).collect();
+        with_game(|game| {
+            game.world_root = root.clone();
+            // The fixture world pre-exists with its data folder, as an
+            // opened world would.
+            game.world.carrier_data_existed_at_open = true;
+            game.save = std::sync::Arc::new(horizon_client::save::SaveDir::new(
+                root.join("dimensions/minecraft/overworld"),
+                horizon_client::save::LevelShape::OVERWORLD,
+            ));
+            for cx in -1..=256 {
+                game.world.chunks.insert(
+                    (cx, 0),
+                    Arc::new(horizon_client::chunk::Chunk::empty(cx, 0)),
+                );
+            }
+            let registry = game.pack.assets.registry;
+            let stone = registry.default_state("minecraft:stone").unwrap();
+            let air = registry.default_state("minecraft:air").unwrap();
+            let fill = |game: &mut Game<'_>| {
+                for pos in &line {
+                    game.world.set(pos.x, pos.y, pos.z, stone).unwrap();
+                }
+            };
+            let carrier_file = |uuid: u128| {
+                let prefix = format!("horizon_carrier_{uuid:032x}-");
+                let entry = std::fs::read_dir(root.join("data"))
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .find(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.starts_with(&prefix))
+                    })
+                    .unwrap();
+                codec::decode(&std::fs::read(entry).unwrap()).unwrap()
+            };
+
+            for (uuid, origin, low, high) in [
+                (71_u128, BlockPos::new(0, 64, 0), 0, 4095),
+                (72, BlockPos::new(2048, 64, 0), -2048, 2047),
+            ] {
+                fill(game);
+                game.carrier_assemble(uuid, &line, Some(origin)).unwrap();
+                assert!(line.iter().all(|p| game.world.block(p.x, p.y, p.z) == air));
+                let carrier = carrier_file(uuid);
+                assert_eq!(carrier.cells().len(), 4096);
+                let xs: Vec<i16> = carrier.cells().iter().map(|c| c.pos().x()).collect();
+                assert_eq!(xs, (low..=high).collect::<Vec<i16>>());
+                assert!(
+                    carrier
+                        .cells()
+                        .iter()
+                        .all(|c| c.pos().y() == 0 && c.pos().z() == 0)
+                );
+                // The carrier sits at the origin, so local + translation
+                // is the world cell each block left.
+                let at = carrier.transform().translation();
+                assert_eq!([at.x, at.y, at.z], [origin.x as f64, 64.0, 0.0]);
+            }
+
+            // An origin 5,000 blocks behind the line puts its far end at
+            // 9,095, past 8,191.
+            fill(game);
+            assert!(matches!(
+                game.carrier_assemble(73, &line, Some(BlockPos::new(-5000, 64, 0))),
+                Err(TransferError::LocalRange)
+            ));
+            // One cell past the cap.
+            game.world.set(-1, 64, 0, stone).unwrap();
+            let mut over = line.clone();
+            over.push(BlockPos::new(-1, 64, 0));
+            assert!(matches!(
+                game.carrier_assemble(74, &over, None),
+                Err(TransferError::TooManyCells(4097))
+            ));
+            assert!(over.iter().all(|p| game.world.block(p.x, p.y, p.z) == stone));
         });
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1670,7 +1774,7 @@ mod tests {
             );
             game.world.set(4, 64, 4, stairs).unwrap();
             let air = registry.default_state("minecraft:air").unwrap();
-            game.carrier_assemble(41, &[BlockPos::new(4, 64, 4)])
+            game.carrier_assemble(41, &[BlockPos::new(4, 64, 4)], None)
                 .unwrap();
             assert_eq!(game.world.block(4, 64, 4), air);
             game.carrier_disassemble(41, 1, [4, 64, 4], [1.0, 0.0, 0.0, 0.0])
@@ -1741,7 +1845,7 @@ mod tests {
             // Crash after prepared.
             game.world.carrier_fences.fail_flush = true;
             assert!(
-                game.carrier_assemble(21, &[BlockPos::new(4, 64, 4), BlockPos::new(6, 64, 4)])
+                game.carrier_assemble(21, &[BlockPos::new(4, 64, 4), BlockPos::new(6, 64, 4)], None)
                     .is_err()
             );
 
@@ -1817,14 +1921,14 @@ mod tests {
             // The writer's barrier fails after prepared.
             game.world.carrier_fences.fail_flush = true;
             assert!(
-                game.carrier_assemble(7, &[BlockPos::new(4, 64, 4)])
+                game.carrier_assemble(7, &[BlockPos::new(4, 64, 4)], None)
                     .is_err()
             );
             // The fences hold and the world refuses further transfers.
             assert!(game.world.carrier_fences.locks_cell(&[4, 64, 4]));
             assert!(game.world.carrier_fences.is_broken());
             assert!(
-                game.carrier_assemble(8, &[BlockPos::new(6, 64, 6)])
+                game.carrier_assemble(8, &[BlockPos::new(6, 64, 6)], None)
                     .is_err()
             );
 
@@ -1888,7 +1992,7 @@ mod tests {
             // The writer's barrier fails after prepared.
             game.world.carrier_fences.fail_flush = true;
             assert!(
-                game.carrier_assemble(9, &[BlockPos::new(4, 64, 4)])
+                game.carrier_assemble(9, &[BlockPos::new(4, 64, 4)], None)
                     .is_err()
             );
 
@@ -1948,7 +2052,7 @@ mod tests {
             assert!(matches!(refused, Err(TransferError::NotLogicalServer)));
 
             // The assembly's gate refuses the same way, not silently.
-            let refused = game.carrier_assemble(3, &[BlockPos::new(0, 64, 0)]);
+            let refused = game.carrier_assemble(3, &[BlockPos::new(0, 64, 0)], None);
             assert!(matches!(refused, Err(TransferError::NotLogicalServer)));
 
             // The world is untouched: no store, no journal, no data.
@@ -1977,7 +2081,7 @@ mod tests {
             let air = registry.default_state("minecraft:air").unwrap();
             game.world.set(4, 64, 4, chest).unwrap();
 
-            game.carrier_assemble(9, &[BlockPos::new(4, 64, 4)])
+            game.carrier_assemble(9, &[BlockPos::new(4, 64, 4)], None)
                 .unwrap();
             assert_eq!(game.world.block(4, 64, 4), air);
             let carrier_bytes =
@@ -2015,7 +2119,7 @@ mod tests {
             let registry = game.pack.assets.registry;
             let chest = registry.default_state("minecraft:chest").unwrap();
             game.world.set(4, 64, 4, chest).unwrap();
-            game.carrier_assemble(5, &[BlockPos::new(4, 64, 4)])
+            game.carrier_assemble(5, &[BlockPos::new(4, 64, 4)], None)
                 .unwrap();
             // A second chest occupies the destination cell.
             game.world.set(10, 64, 10, chest).unwrap();
@@ -2052,7 +2156,7 @@ mod tests {
             let registry = game.pack.assets.registry;
             let chest = registry.default_state("minecraft:chest").unwrap();
             game.world.set(4, 64, 4, chest).unwrap();
-            game.carrier_assemble(6, &[BlockPos::new(4, 64, 4)])
+            game.carrier_assemble(6, &[BlockPos::new(4, 64, 4)], None)
                 .unwrap();
 
             // A sixth of a turn about Y: not a cube symmetry.
@@ -2151,7 +2255,7 @@ mod tests {
                 .insert((0, 0), Arc::new(horizon_client::chunk::Chunk::empty(0, 0)));
             game.world.set(4, 64, 4, chest).unwrap();
             game.world.carrier_fences.fail_flush = true;
-            let failed = game.carrier_assemble(11, &[BlockPos::new(4, 64, 4)]);
+            let failed = game.carrier_assemble(11, &[BlockPos::new(4, 64, 4)], None);
             assert!(failed.is_err(), "the injected flush must fail: {failed:?}");
             let why = failed.unwrap_err().to_string();
             assert!(
@@ -2346,7 +2450,7 @@ mod tests {
             }
             // Committed: the routes admit again (the full save writes
             // the harness's throwaway world, which is allowed here).
-            game.carrier_assemble(13, &[BlockPos::new(4, 64, 4)])
+            game.carrier_assemble(13, &[BlockPos::new(4, 64, 4)], None)
                 .unwrap();
             assert!(game.save_game_with(true).is_ok(), "after the commit");
         });
@@ -2375,7 +2479,7 @@ mod tests {
             let registry = game.pack.assets.registry;
             let chest = registry.default_state("minecraft:chest").unwrap();
             game.world.set(4, 64, 4, chest).unwrap();
-            game.carrier_assemble(14, &[BlockPos::new(4, 64, 4)])
+            game.carrier_assemble(14, &[BlockPos::new(4, 64, 4)], None)
                 .unwrap();
 
             // save-all with its flush, and no pending operation.

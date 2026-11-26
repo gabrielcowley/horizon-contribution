@@ -1,0 +1,2 @@
+# The carrier's wide local coordinates: a 4,096-cell line assembled through the live transfer.
+horizon-client game::carrier_transfers::tests::a_4096_cell_line_assembles_from_an_origin_at_its_end_or_middle lib daily resources

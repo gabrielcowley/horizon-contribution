@@ -147,7 +147,7 @@ Each lifecycle callback receives ServerHost; rendering receives ClientHost and
 DrawContext. Decide, fire, revalidate, apply; no parallel compatibility hook family.
 
 Treat all mod values, persisted data and network payloads as untrusted. Initial
-limits: 4,096 non-air cells, local coordinates -128..127, 16 MiB decoded carrier data,
+limits: 4,096 non-air cells, local coordinates -8,192..8,191, 16 MiB decoded carrier data,
 64 KiB per cell, 64 resident chunks per carrier, translation at most 1 block/tick,
 rotation at most 5 degrees/tick, and finite world positions inside the world border.
 Reject duplicate cells, arithmetic overflow, invalid registry values, NaN/infinity,

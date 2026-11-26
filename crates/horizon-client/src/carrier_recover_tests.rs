@@ -230,8 +230,7 @@ fn carrier_of(operation: &Operation) -> Vec<u8> {
     let cells = operation
         .cells
         .iter()
-        .enumerate()
-        .map(|(index, cell)| {
+        .map(|cell| {
             let data = cell.before.entity.as_ref().and_then(|entity| {
                 nbt::write_named(
                     &NamedTag {
@@ -243,7 +242,12 @@ fn carrier_of(operation: &Operation) -> Vec<u8> {
                 .ok()
             });
             Cell::new(
-                LocalPos::new(index as i8, 0, 0),
+                LocalPos::new(
+                    i32::from(cell.local[0]),
+                    i32::from(cell.local[1]),
+                    i32::from(cell.local[2]),
+                )
+                .unwrap(),
                 &cell.before.name,
                 cell.before.properties.clone(),
                 data,
@@ -423,6 +427,65 @@ fn a_crash_after_every_chunk_before_committed_only_verifies() {
     .unwrap();
     assert_eq!(report.applied, 0);
     assert!(store.journal().in_progress.is_none());
+}
+
+/// Locals at both ends of the wide range ride the operation record
+/// through a crash at every journal step: before `prepared` nothing
+/// replays, after it the chunk takes the after-image, and with the chunk
+/// already saved recovery only verifies. Each recovery matches the
+/// record's locals against the published carrier's cells.
+#[test]
+fn wide_locals_recover_at_every_journal_step() {
+    for step in ["operation-file", "prepared", "chunk-saved"] {
+        let fixture = Fixture::new(&format!("wide-{step}"));
+        let position = ChunkPos::new(0, 0);
+        let (first, second) = ([4, 0, 4], [8, 0, 8]);
+        let (state, entities) = if step == "chunk-saved" {
+            (Tag::String("minecraft:air".into()), Vec::new())
+        } else {
+            (
+                chest_state_tag(),
+                vec![(first, vec![7; 8]), (second, vec![7; 8])],
+            )
+        };
+        put_chunk(&fixture, position, &chunk_root(state, &entities));
+        let mut store = fixture.store();
+        let mut operation = assemble_chest(store.next_op_id(), first);
+        operation.cells[0].local = [-8192, 8191, -8192];
+        let mut far = operation.cells[0].clone();
+        far.world = second;
+        far.local = [8191, -8192, 8191];
+        operation.cells.push(far);
+        if step == "operation-file" {
+            store
+                .write_operation(operation.op_id, &encode_operation(&operation).unwrap())
+                .unwrap();
+        } else {
+            prepare_with_published_carrier(&mut store, &operation);
+        }
+        let report = recover(
+            &mut store,
+            &fixture.region(),
+            &AllStatesKnown,
+            "minecraft:overworld",
+        )
+        .unwrap();
+        let root = get_chunk(&fixture, position).unwrap();
+        match step {
+            "operation-file" => {
+                assert_eq!(report, crate::carrier_store::Recovered::default());
+                assert_eq!(chest_items(&root, first), Some(8));
+                assert_eq!(chest_items(&root, second), Some(8));
+            }
+            "prepared" => {
+                assert_eq!(report.applied, 1, "{step}");
+                assert_eq!(chest_items(&root, first), None);
+                assert_eq!(chest_items(&root, second), None);
+            }
+            _ => assert_eq!((report.applied, report.verified), (0, 1), "{step}"),
+        }
+        assert!(store.journal().in_progress.is_none(), "{step}");
+    }
 }
 
 #[test]
@@ -984,7 +1047,7 @@ fn a_prepared_assembly_recovery_owns_the_cargo_in_a_carrier_file() {
     assert_eq!(carrier.cells().len(), 1, "the whole cargo is carried");
     let cell = &carrier.cells()[0];
     assert_eq!(cell.name(), "minecraft:chest");
-    assert_eq!(cell.pos(), LocalPos::new(0, 0, 0));
+    assert_eq!(cell.pos(), LocalPos::new(0, 0, 0).unwrap());
     let entity = cell
         .data()
         .unwrap_or_else(|| panic!("the block entity rides the carrier"));
@@ -1306,7 +1369,7 @@ fn an_undecodable_entity_payload_refuses() {
     store.commit().unwrap();
     let cells = vec![
         Cell::new(
-            LocalPos::new(0, 0, 0),
+            LocalPos::new(0, 0, 0).unwrap(),
             "minecraft:chest",
             vec![("facing".to_string(), "north".to_string())],
             Some(vec![0xff, 0xff, 0xff, 0xff]),
