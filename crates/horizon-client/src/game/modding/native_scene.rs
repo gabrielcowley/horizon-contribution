@@ -1067,6 +1067,49 @@ mod tests {
         assert!(turned.transform_vector3(Vec3::X).z > 0.99);
     }
 
+    /// A Java GUI pose stack that turns a scene about x by `a`, then about y by `b`, flips
+    /// it for GUI rendering (`scale(1, -1, 1)`) and scales it by `s` is the same view with
+    /// `pitch = -a` and `yaw = b + 180`. A constant screen shift on top of it is the same
+    /// view with its centre moved by the shift seen back through the view.
+    #[test]
+    fn a_pose_stack_turned_x_then_y_and_flipped_is_a_view() {
+        let rect = [10.0, 20.0, 410.0, 270.0];
+        let middle = Vec3::new(210.0, 145.0, 0.0);
+        let center = Vec3::new(2.5, 1.0, 2.5);
+        let close = |a: Mat4, b: Mat4| {
+            a.to_cols_array()
+                .iter()
+                .zip(b.to_cols_array())
+                .all(|(x, y)| (x - y).abs() < 1e-3)
+        };
+        for a in [-35.0f32, -90.0, 0.0, 12.5, 60.0] {
+            for b in [145.0f32, 0.0, -55.0, 90.0, 270.0] {
+                for s in [30.0f32, 18.0, 45.0] {
+                    let stack = Mat4::from_translation(middle)
+                        * Mat4::from_rotation_x(a.to_radians())
+                        * Mat4::from_rotation_y(b.to_radians())
+                        * Mat4::from_scale(Vec3::new(1.0, -1.0, 1.0))
+                        * Mat4::from_scale(Vec3::splat(s))
+                        * Mat4::from_translation(-center);
+                    let view = SceneView::new(center.to_array(), b + 180.0, -a, s);
+                    let m = scene_matrix(rect, view);
+                    assert!(close(m, stack), "a = {a}, b = {b}, s = {s}");
+
+                    let shift = Mat4::from_rotation_x((-35.0f32).to_radians())
+                        .transform_vector3(Mat4::from_rotation_y(55.0f32.to_radians())
+                            .transform_vector3(Vec3::new(-40.0, 0.0, 0.0)));
+                    let linear = glam::Mat3::from_mat4(m);
+                    let moved = center - linear.inverse() * shift;
+                    let slid = scene_matrix(rect, SceneView::new(moved.to_array(), b + 180.0, -a, s));
+                    assert!(
+                        close(slid, Mat4::from_translation(shift) * stack),
+                        "slid: a = {a}, b = {b}, s = {s}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn faces_are_shaded_as_blocks_are() {
         assert_eq!(face_shade(Vec3::Y), 1.0);
