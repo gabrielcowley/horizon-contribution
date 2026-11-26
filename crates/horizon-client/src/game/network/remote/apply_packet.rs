@@ -407,6 +407,12 @@ impl Game<'_> {
                     p.position,
                     (rotation[0], rotation[1]),
                     p.data,
+                ) && !self.spawn_remote_general(
+                    p.id,
+                    &kind,
+                    p.position,
+                    [rotation[0], rotation[1]],
+                    p.velocity,
                 ) {
                     self.spawn_added_projectile(&p, &kind, (rotation[0], rotation[1]), replace);
                 }

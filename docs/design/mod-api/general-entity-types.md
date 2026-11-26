@@ -7,7 +7,9 @@ Provisional answer to [arismoko/horizon#792](https://github.com/arismoko/horizon
 `Hooks::register` receives `&mut dyn Registrar`, whose `GeneralTypesRegistrar`
 supertrait provides `declare_general_entity(path, category, width, height,
 save_policy, summonable, tracking_chunks, update_interval, payload_version,
-required_features)`. Use `GeneralEntityCategory::Misc` and
+required_features)`, and `general_entity_sends_velocity(path, sends)` sets a
+declared type's velocity updates (vanilla's `setShouldReceiveVelocityUpdates`,
+`true` by default). Use `GeneralEntityCategory::Misc` and
 `GeneralSavePolicy::{Save, NoSave}`. The path must belong to the declaring
 mod's namespace. Registration is only available during the registration phase,
 requires a both-side package, and refuses duplicates and unavailable required
@@ -46,6 +48,25 @@ writes back. The moment fires only for general rows: vanilla families tick
 their own paths, and bringing them to one walk is #6509's, extendable
 later if Ari wants it wider. Wasm crossing is stage 4b; a wasm mod naming
 the hook is refused at load with that reason, never silently skipped.
+
+Stage 5's tracking and drawing ship on vanilla's entity packets, with no
+stream of their own. A general row is tracked as any entity is: its type's
+network id follows vanilla's and the content mods' in the frozen registry's
+order, its range, update interval (`i32::MAX`: the pose at spawn and on a
+teleport only) and velocity updates come from its declaration, and the add,
+move, teleport, velocity and remove packets follow `ServerEntity.sendChanges`.
+Its synced attachments are its spawn snapshot: a player who starts tracking
+it gets them whole in the flush that carries the add packet. A row may have
+its own box (`EntityRef::set_bounds`, at most 64 blocks a side), saved and
+synced as the engine's `horizon:general_box` attachment, and read by every
+box query on both sides. `spawn_general` spawns a row through `summon`'s
+path and returns its handle at once. A client keeps its copies of the rows
+in its own general store under their network ids, eases them with vanilla's
+three-step `lerpTo` and runs no behaviour on them. Its renderer is the type's
+registered `EntityRenderer` (its shadow from `EntityRenderers::shadow_radius`), handed an `EntityRenderState` whose
+`GeneralRenderState` (type, box, synced attachment values) can also be built
+from data alone; a type with no renderer draws only its debug hitbox. Riders
+of general vehicles are the next part.
 
 The remaining sections describe the wider design, not shipped lifecycle support.
 

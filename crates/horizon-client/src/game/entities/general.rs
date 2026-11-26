@@ -493,6 +493,11 @@ impl GeneralTypeCatalog {
         (entry.width, entry.height)
     }
 
+    /// The payload schema version the type declared, which a fresh row carries.
+    pub fn payload_version(&self, slot: usize) -> u16 {
+        self.entries[slot].payload_version
+    }
+
     /// The type's declared save policy, the writer of a record consults: a
     /// `noSave` type's rows produce zero persisted records.
     pub fn save_policy(&self, slot: usize) -> mod_api::GeneralSavePolicy {
@@ -556,6 +561,8 @@ pub struct GeneralRow {
     pub velocity: Vec3,
     /// The yaw and pitch in degrees.
     pub rotation: [f32; 2],
+    /// The yaw and pitch when the last tick began, for a frame's interpolation.
+    pub previous_rotation: [f32; 2],
     /// How far the row has fallen; stage 3's load and stage 4's tick own it.
     pub fall_distance: f64,
     /// The payload's schema version, as the record carried it and the writer
@@ -566,6 +573,17 @@ pub struct GeneralRow {
     /// The row whose vehicle this one rides (`None` for a root): a rider
     /// saves inside its root's record, never as its own.
     pub mount: Option<u32>,
+    /// The row's own box relative to its position (`entity_set_bounds`), or
+    /// `None` for the type's declared width and height. The value lives in
+    /// the [`GENERAL_BOX`] attachment, which saves and syncs it; this is the
+    /// row's copy of it, which every box read takes.
+    pub local_box: Option<[[f64; 3]; 2]>,
+    /// `Entity.needsSync`: a teleport placed the row, and its trackers hear
+    /// its pose this tick whatever its type's update interval.
+    pub needs_sync: bool,
+    /// Ticks the row has lived on this side (`Entity.tickCount`): a client's
+    /// copy counts them for its renderer's `age`.
+    pub age: u32,
     /// The entity-owned attachment registration lifetime (arismoko/horizon#796: the sole
     /// Part-data store; there is no parallel entity data map).
     pub attachment_lifetime: horizon_mod_runtime::attachments::AttachmentLifetime,
@@ -962,14 +980,20 @@ impl Game<'_> {
             position,
             velocity: Vec3::new(record.velocity[0], record.velocity[1], record.velocity[2]),
             rotation: record.rotation,
+            previous_rotation: record.rotation,
             fall_distance: 0.0,
             payload_version: record.envelope.payload_version,
             payload_bytes: record.envelope.payload_bytes,
             mount,
+            local_box: None,
+            needs_sync: false,
+            age: 0,
             attachment_lifetime: Default::default(),
         };
         self.bind_saved_entity_attachments(id, &mut row.attachment_lifetime);
         self.resident_entities.general.rows.push(row);
+        // Its own box, when its saved attachments carry one (`entity_set_bounds`).
+        self.refresh_general_box(id);
         // The riders' tags sit inside `Passengers` in the order the record
         // tree was built from them, so each rider's own tag (its saved
         // attachments) is the one at its index.
@@ -1046,9 +1070,15 @@ impl Entity for GeneralRow {
         self.rotation = rotation;
     }
     fn bounds(&self) -> Aabb {
+        let at = self.position;
+        if let Some([min, max]) = self.local_box {
+            return Aabb::new(
+                Vec3::new(at.x + min[0], at.y + min[1], at.z + min[2]),
+                Vec3::new(at.x + max[0], at.y + max[1], at.z + max[2]),
+            );
+        }
         let (width, height) = general_type_catalog().dimensions(self.type_slot);
         let half = width / 2.0;
-        let at = self.position;
         Aabb::new(
             Vec3::new(at.x - half, at.y, at.z - half),
             Vec3::new(at.x + half, at.y + height, at.z + half),
@@ -1109,6 +1139,12 @@ fn chunk_of(at: Vec3) -> ChunkKey {
 
 #[path = "general/tick.rs"]
 mod tick;
+
+#[path = "general/bounds.rs"]
+mod bounds;
+
+#[path = "general/draw.rs"]
+mod draw;
 
 #[cfg(test)]
 #[path = "general/save_load_tests.rs"]
@@ -1318,6 +1354,7 @@ mod tests {
             summonable: true,
             tracking_chunks: 8,
             update_interval: 3,
+            sends_velocity: true,
             payload_version: 1,
             required_features: Vec::new(),
         }
@@ -1389,10 +1426,14 @@ mod tests {
             previous: Vec3::new(0.5, 64.0, 0.5),
             velocity: Vec3::ZERO,
             rotation: [0.0, 0.0],
+            previous_rotation: [0.0, 0.0],
             fall_distance: 0.0,
             payload_version: 1,
             payload_bytes: Vec::new(),
             mount: None,
+            local_box: None,
+            needs_sync: false,
+            age: 0,
             attachment_lifetime: Default::default(),
         });
         let mut table = EntityTable::new(journal);

@@ -69,6 +69,7 @@ impl GeneralTypesRegistrar for PartRegistrar {
                     summonable,
                     tracking_chunks,
                     update_interval,
+                    sends_velocity: true,
                     payload_version,
                     required_features: required_features.iter().map(|&f| f.to_owned()).collect(),
                 });
@@ -81,6 +82,34 @@ impl GeneralTypesRegistrar for PartRegistrar {
             ));
         }
         result
+    }
+
+    fn general_entity_sends_velocity(
+        &mut self,
+        path: &str,
+        sends_velocity: bool,
+    ) -> Result<(), GeneralEntityRegistrationError> {
+        use GeneralEntityRegistrationError as Error;
+        if crate::__private::current_phase() != crate::__private::ModPhase::Registration {
+            self.refused.push(format!(
+                "mod {} sets a general entity type's velocity updates after the registry froze",
+                self.mod_id
+            ));
+            return Err(Error::Frozen);
+        }
+        let declared = self
+            .owned_declaration_id(path)
+            .ok()
+            .and_then(|id| self.general_entity_types.iter_mut().find(|d| d.id == id));
+        let Some(declared) = declared else {
+            self.refused.push(format!(
+                "mod {} sets velocity updates of {path:?}, a general entity type it did not declare",
+                self.mod_id
+            ));
+            return Err(Error::InvalidId);
+        };
+        declared.sends_velocity = sends_velocity;
+        Ok(())
     }
 }
 

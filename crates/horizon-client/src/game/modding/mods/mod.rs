@@ -672,7 +672,9 @@ pub(super) fn register_entity_renderers(role: ExecutionRole) {
     }
     let mut registry = mod_api::EntityRendererRegistry::default();
     Game::native_register_entity_renderers(&RegistrationContext::new(), &mut registry);
-    super::native_entity_renderers::register(registry.into_renderers());
+    let (renderers, shadows) = registry.into_renderers_and_shadows();
+    super::native_entity_renderers::register(renderers);
+    super::native_entity_renderers::register_shadows(shadows);
 }
 /// The native mods' particle providers (`native_register_particle_providers`) and render groups
 /// (`native_register_particle_groups`), kept once at start, before resources load; every particle
@@ -1126,7 +1128,9 @@ pub(in crate::game) fn register_iterated_registries(
 ) -> horizon_client::Result<()> {
     use horizon_protocol::registry::Builtin;
     let path = Builtin::find(root).ok_or("registries.json not found")?;
-    let builtin = Builtin::load(&path)?;
+    // The mods' general entity types are keyed after the report's own types,
+    // in the order their network ids take (`with_general_entity_types`).
+    let builtin = horizon_client::lan::data::with_custom_stats(Builtin::load(&path)?);
     if let Some(ids) = builtin.get("minecraft:entity_type") {
         mod_api::__private::resolve_entity_types(ids.names.iter().map(String::as_str))
             .map_err(|errors| errors.join("\n"))?;

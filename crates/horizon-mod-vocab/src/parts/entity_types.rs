@@ -17,6 +17,9 @@ pub mod limits {
     pub const MAX_NESTING: u32 = 32;
     /// The deepest chain of passengers a general entity tree may carry.
     pub const MAX_PASSENGER_DEPTH: u32 = 16;
+    /// The longest side, in blocks, of a box a general entity is given with
+    /// `entity_set_bounds` or `spawn_general`: the design's size bound.
+    pub const MAX_BOX_EXTENT: f64 = 64.0;
     /// The largest record a missing mod's quarantined general entity may
     /// occupy, as its encoded NBT size. A larger record is skipped with a
     /// warning rather than preserved. There is no vanilla analogue:
@@ -77,6 +80,10 @@ pub struct GeneralEntityTypeDeclaration {
     /// Update interval in ticks, stored directly like vanilla's signed integer.
     /// `i32::MAX` is vanilla's no-update-interval value.
     pub update_interval: i32,
+    /// Whether trackers hear the instance's velocity whenever it changes
+    /// (vanilla's `setShouldReceiveVelocityUpdates`, `true` by default).
+    /// Without it, the velocity reaches clients only in the spawn packet.
+    pub sends_velocity: bool,
     /// The payload schema version instances of the type carry.
     pub payload_version: u16,
     /// The ids of loaded mods this type requires, every one of which must be
@@ -98,6 +105,7 @@ impl Default for GeneralEntityTypeDeclaration {
             summonable: true,
             tracking_chunks: 5,
             update_interval: 3,
+            sends_velocity: true,
             payload_version: 1,
             required_features: Vec::new(),
         }
@@ -160,5 +168,20 @@ pub trait GeneralTypesRegistrar {
         update_interval: i32,
         payload_version: u16,
         required_features: &[&str],
+    ) -> Result<(), GeneralEntityRegistrationError>;
+
+    /// Whether the trackers of the mod's general type `path` (declared by
+    /// [`declare_general_entity`](Self::declare_general_entity) before this
+    /// call) hear its velocity each time it changes: vanilla's
+    /// `setShouldReceiveVelocityUpdates`, `true` until this sets it. Without
+    /// it, a client gets the velocity only in the spawn packet.
+    ///
+    /// A path that names no type this mod declared refuses with `InvalidId`,
+    /// and a call after the registry froze with `Frozen`, naming the mod,
+    /// without panicking.
+    fn general_entity_sends_velocity(
+        &mut self,
+        path: &str,
+        sends_velocity: bool,
     ) -> Result<(), GeneralEntityRegistrationError>;
 }

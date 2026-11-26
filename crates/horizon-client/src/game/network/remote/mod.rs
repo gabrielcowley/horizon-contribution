@@ -1305,7 +1305,7 @@ impl Game<'_> {
     pub(in crate::game) fn tick_remote_arm_poses(&mut self) {
         self.tick_remote_arm_poses_body()
     }
-    fn tick_remote_entities(&mut self, running: bool) {
+    pub(in crate::game) fn tick_remote_entities(&mut self, running: bool) {
         self.tick_remote_entities_body(running)
     }
 

@@ -108,9 +108,14 @@ fn resolve(ids: &[&str]) -> (EntityRendererTable, Vec<String>) {
             )
         })
         .collect();
-    EntityRendererTable::resolve(&registered, &TYPES, &Default::default(), |id| {
-        ["minecraft:oak_boat", "ruby:bolt", "ruby:dart"].contains(&id)
-    })
+    EntityRendererTable::resolve(
+        &registered,
+        &TYPES,
+        &Default::default(),
+        &crate::game::general::GeneralTypeCatalog::freeze(&[]).unwrap(),
+        &BTreeMap::new(),
+        |id| ["minecraft:oak_boat", "ruby:bolt", "ruby:dart"].contains(&id),
+    )
 }
 
 #[test]
@@ -128,6 +133,40 @@ fn a_registration_for_an_unknown_entity_type_is_refused_by_name() {
         table.thrown(&TYPES[0]).is_some(),
         "the known one still resolves"
     );
+}
+
+/// A mod's general type is a route of its own, by registry slot, with the shadow its renderer
+/// its mod gave it; a general type with none resolves to nothing.
+#[test]
+fn a_general_type_resolves_to_its_slot_with_its_shadow() {
+    let declaration = |id: &str| mod_api::__private::GeneralEntityTypeDeclaration {
+        mod_id: "ruby".into(),
+        id: id.into(),
+        ..Default::default()
+    };
+    let catalog = crate::game::general::GeneralTypeCatalog::freeze(&[
+        declaration("ruby:crate"),
+        declaration("ruby:seat"),
+    ])
+    .unwrap();
+    let registered: BTreeMap<String, Arc<dyn EntityRenderer>> = [(
+        "ruby:crate".to_owned(),
+        Raised::new(1.0) as Arc<dyn EntityRenderer>,
+    )]
+    .into();
+    let shadows = [("ruby:crate".to_owned(), 0.5)].into();
+    let (table, unknown) = EntityRendererTable::resolve(
+        &registered,
+        &TYPES,
+        &Default::default(),
+        &catalog,
+        &shadows,
+        |_| false,
+    );
+    assert!(unknown.is_empty(), "a general type is a known one");
+    let slot = catalog.slot("ruby:crate").unwrap();
+    assert_eq!(table.general(slot).map(|(_, radius)| *radius), Some(0.5));
+    assert!(table.general(catalog.slot("ruby:seat").unwrap()).is_none());
 }
 
 #[test]

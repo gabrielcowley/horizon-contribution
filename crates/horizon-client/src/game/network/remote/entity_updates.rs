@@ -36,7 +36,8 @@ impl Game<'_> {
         let v = Vec3::new(velocity[0], velocity[1], velocity[2]);
         // `falling` and `tnts` are searched from the back: AddEntity calls this right after
         // appending the block or TNT, so a spawn doesn't walk the whole list.
-        if let Some(m) = self.mob_index.get_mut(&mut self.mobs, id as u32) {
+        if self.remote_general_motion(id, velocity) {
+        } else if let Some(m) = self.mob_index.get_mut(&mut self.mobs, id as u32) {
             // Squid.aiStep derives its body pitch and roll from network motion.
             m.velocity = v;
         } else if let Some(d) = self.dropped.iter_mut().find(|d| d.id == id as u32) {

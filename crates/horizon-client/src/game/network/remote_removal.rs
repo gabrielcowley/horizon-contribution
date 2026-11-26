@@ -85,6 +85,7 @@ impl Game<'_> {
             }
         };
         self.mobs.retain(|m| keep(m.id));
+        self.remove_remote_general(&removed);
         self.orbs.retain(|o| keep(o.id));
         self.dropped.retain(|d| keep(d.id));
         self.falling.retain(|f| keep(f.id));

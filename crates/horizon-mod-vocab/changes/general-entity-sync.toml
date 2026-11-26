@@ -1,0 +1,14 @@
+ids = [
+  "method:GeneralTypesRegistrar::general_entity_sends_velocity",
+  "type:GeneralEntityTypeDeclaration",
+  "type:GeneralEntityTypeDeclaration.sends_velocity",
+  "method:prelude::EntitiesServerHost::spawn_general",
+  "handle:EntityRef::set_bounds",
+  "type:EntityRenderState",
+  "type:EntityRenderState.general",
+  "type:GeneralRenderState",
+  "method:EntityRenderers::shadow_radius",
+  "type:EntityRendererRegistry",
+]
+why = "General entity types reach clients (arismoko/horizon#792 stage 5): a general row is tracked on vanilla's entity packets, with its synced attachments as its spawn snapshot, and drawn by its type's registered renderer from plain data. Registrar::general_entity_sends_velocity sets a declared type's velocity updates (vanilla's setShouldReceiveVelocityUpdates); spawn_general spawns a row with a handle at once; EntityRef::set_bounds gives a row its own box; EntityRenderState gains general (its type, box and synced attachment values, buildable from data for screens and scenes), so it is no longer Copy; EntityRenderers::shadow_radius gives a type's shadow. The render state's wire layout changes for wasm mods."
+migrate = "Clone an EntityRenderState where code copied it, and rebuild wasm renderers. The rest is additive."

@@ -94,6 +94,26 @@ pub trait EntitiesServerHost {
     #[access(WorldOnly)]
     fn summon(&mut self, dimension: &str, kind: &str, pos: [f64; 3], nbt: Compound) -> Option<u32>;
     /// Side: server.
+    /// Spawns a row of the general entity type `kind` (one a mod declared with
+    /// `declare_general_entity`) at `pos` in the level in place, `dimension`, turned to
+    /// `rotation` (yaw, pitch in degrees), with its own box relative to `pos` when `bounds`
+    /// (`[min, max]`) is given, as [`entity_set_bounds`](EntityRef::set_bounds) would set it.
+    /// Its handle comes back at once: write the row's attachments on it before the tick ends,
+    /// and a client that starts tracking the row gets them with its spawn. As `summon`,
+    /// inside a transaction its join waits for the root commit, and a mod keeping it out
+    /// leaves the handle naming nothing. None for a kind no mod declared as a general type,
+    /// a box `entity_set_bounds` refuses, a rotation that is not finite, and whatever
+    /// `summon` refuses.
+    #[access(WorldOnly)]
+    fn spawn_general(
+        &mut self,
+        dimension: &str,
+        kind: &str,
+        pos: [f64; 3],
+        rotation: [f32; 2],
+        bounds: Option<[[f64; 3]; 2]>,
+    ) -> Option<EntityRef>;
+    /// Side: server.
     /// Writes the experience orb `id`'s `value` (the points a pickup gives), `count`
     /// (orbs merged into it, each worth `value`) and `age` (ticks lived; an orb
     /// despawns at 6000); a `None` is left as it is. Signed values are preserved,
@@ -767,6 +787,15 @@ pub trait EntitiesBackendMut {
     /// or on a client. API 379.
     #[access(WorldOnly)]
     fn entity_set_velocity(&mut self, entity: EntityRef, velocity: [f64; 3]) -> bool;
+    /// Side: server.
+    /// Gives a general entity row its own box, `min..max` relative to its position, in place
+    /// of its type's declared width and height. The box saves with the row, reaches clients
+    /// that see it, and is the one `entity_bounding_box` and `level_entities_in` read on both
+    /// sides. False, and nothing written, for an entity that is not a general row, a corner
+    /// that is not finite, a `min` above its `max`, a side longer than
+    /// [`MAX_BOX_EXTENT`](crate::general_entity_limits::MAX_BOX_EXTENT) blocks, or on a client.
+    #[access(WorldOnly)]
+    fn entity_set_bounds(&mut self, entity: EntityRef, min: [f64; 3], max: [f64; 3]) -> bool;
     /// Side: server.
     /// Moves the entity to `pos` in its level (`Entity.teleportTo`), as
     /// `/tp` does: a player is placed there and told, a rider gets off. With

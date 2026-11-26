@@ -1086,6 +1086,20 @@ impl Game<'_> {
                 lerp(previous.z, now.z),
             ]
         };
+        // General rows: their own box or their type's, drawn by no renderer too
+        // (vanilla's `NoopRenderer` keeps the debug hitbox).
+        for row in self.resident_entities.general.rows.iter() {
+            let pos = at(row.previous, row.position);
+            let local = Self::general_local_box(row);
+            let min = std::array::from_fn(|i| pos[i] + local[0][i]);
+            let max = std::array::from_fn(|i| pos[i] + local[1][i]);
+            let height = (local[1][1] - local[0][1]) as f32;
+            let view = (
+                lerpf(row.previous_rotation[1], row.rotation[1]),
+                lerpf(row.previous_rotation[0], row.rotation[0]),
+            );
+            g.entity_box(min, max, pos, height * 0.85, false, view);
+        }
         for p in &self.paintings {
             let (min, max) = p.bounds();
             let centre = std::array::from_fn(|i| (min[i] + max[i]) / 2.0);

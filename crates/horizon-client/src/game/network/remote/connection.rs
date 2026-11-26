@@ -246,6 +246,7 @@ impl Game<'_> {
         self.remove_local_player_body();
         self.spawn = None;
         self.mobs.clear();
+        self.resident_entities.general.rows.clear();
         self.clear_remote_objects();
         self.clear_remote_projectiles();
         self.creatures.projectiles.clear();
@@ -524,6 +525,7 @@ impl Game<'_> {
         self.remove_local_player_body();
         self.spawn = None;
         self.mobs.clear();
+        self.resident_entities.general.rows.clear();
         self.clear_remote_objects();
         self.clear_remote_projectiles();
         self.creatures.projectiles.clear();

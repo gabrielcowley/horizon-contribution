@@ -1564,8 +1564,21 @@ impl Game<'_> {
         // PositionMoveRotation.calculateAbsolute clamps pitch before setXRot.
         let rotation = rotation.map(|[yaw, pitch]| [yaw, pitch.clamp(-90.0, 90.0)]);
         match t {
-            // Stage 3's insertion joins live rows; there is nothing to place.
-            Target::General(_) => {}
+            Target::General(id) => {
+                let rows = &mut self.resident_entities.general.rows;
+                if let Some(i) = rows.iter().position(|row| row.id == id) {
+                    rows.update(i, |row| {
+                        row.position = v;
+                        row.previous = v;
+                        if let Some(r) = rotation {
+                            row.rotation = r;
+                        }
+                        // `Entity.teleportTo`'s `needsSync`: trackers hear the
+                        // new place this tick, whatever the type's interval.
+                        row.needs_sync = true;
+                    });
+                }
+            }
             Target::Guest(_) => {
                 self.for_player(t, |g| {
                     g.teleport_to_relative(Target::Player, pos, rotation, relative, turn_riders)

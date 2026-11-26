@@ -59,15 +59,15 @@ the drawing through the shared draw boundary.
 A later registration for a type replaces the earlier one, whichever mod made it, as in NeoForge. When
 resources load, a registration for a type the game does not know is logged with the type's id and left
 out; one for a known type whose family does not draw through registered renderers yet is kept silently,
-and the type keeps its own drawing until its family does. Today two routes draw through registered
+and the type keeps its own drawing until its family does. Today three routes draw through registered
 renderers: the content mods' thrown types (a `data/<id>/horizon/entity_type/<name>.json` with the
-`minecraft:snowball` template), and the living types drawn as mobs, vanilla's and the content mods'
+`minecraft:snowball` template), the mods' general entity types (#792), which draw nothing but their
+debug hitbox without one, and the living types drawn as mobs, vanilla's and the content mods'
 (not the player, whose model goes by its skin, and not the armour stand or the ender dragon, which draw
 through routes of their own). Around a living type's renderer everything else stays: `render_living_pre`
 (whose cancel skips it), the mods' layers (with no posed parts) and `render_living_post`, in the order
 the type's own model has, so it changes with #3915 and not before. Boats, displays and the other
-projectiles come in follow-ups of #860, and a mod's general entity types (#792) will register the same
-way. A renderer that returns an `Err`,
+projectiles come in follow-ups of #860. A renderer that returns an `Err`,
 panics, or (in a wasm mod) has its call refused or trapped is logged once with the error and asked no
 more until the next resource load resolves it again; what it drew that frame is dropped, and until then
 its type draws as it would without one."#]
