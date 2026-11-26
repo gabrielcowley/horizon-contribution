@@ -5,20 +5,15 @@ use crate::{Error, Result};
 use horizon_core::{nbt, nbt::Tag};
 use std::marker::PhantomData;
 
-/// Vanilla's default NBT quota for network tags (NbtAccounter.defaultQuota).
-pub const NBT_QUOTA: usize = nbt::Limits::network().max_bytes;
-/// The most tags one network NBT value can hold within [`NBT_QUOTA`], using
-/// vanilla's minimum eight-byte per-tag heap charge.
-pub const NBT_MAX_TAGS: usize = nbt::Limits::network().max_nodes;
+/// Vanilla's default NBT quota for network tags (NbtAccounter.defaultQuota), in heap bytes as
+/// `NbtAccounter` charges them, not encoded bytes.
+pub const NBT_QUOTA: usize = nbt::NETWORK_NBT_QUOTA as usize;
 
-/// Whether a peer can read `tag` as network NBT: written within [`NBT_QUOTA`], then read back by
-/// [`Reader::nbt`] under the receiver's own limits (`NbtAccounter.defaultQuota` and its tag count).
+/// Whether a peer can read `tag` as network NBT: written as [`Writer::nbt`] writes it, then read
+/// back by [`Reader::nbt`] under the receiver's own limit (`NbtAccounter.defaultQuota`).
 pub fn check_network_nbt(tag: &Tag) -> Result<()> {
-    let limits = nbt::Limits {
-        max_bytes: NBT_QUOTA,
-        ..nbt::Limits::default()
-    };
-    let bytes = nbt::write_network(tag, limits).map_err(|e| Error::new(format!("NBT: {e}")))?;
+    let bytes = nbt::write_network(tag, nbt::Limits::default())
+        .map_err(|e| Error::new(format!("NBT: {e}")))?;
     Reader::new(&bytes).nbt().map(drop)
 }
 
@@ -189,9 +184,14 @@ impl<'a> Reader<'a> {
     pub fn uuid(&mut self) -> Result<u128> {
         Ok(u128::from_be_bytes(self.array()?))
     }
-    /// A network NBT tag (NbtIo.readAnyTag without a root name); `End` means none.
+    /// A network NBT tag (NbtIo.readAnyTag without a root name) read as `ByteBufCodecs.TAG`
+    /// reads it: under `NbtAccounter.defaultQuota`, which charges vanilla's heap estimate of each
+    /// tag rather than its encoded bytes, and 512 levels deep. `End` means none.
     pub fn nbt(&mut self) -> Result<Tag> {
-        self.nbt_within(nbt::Limits::network())
+        let (tag, used) = Tag::from_network_bytes(&self.data[self.pos..], None)
+            .map_err(|e| Error::new(format!("NBT: {e}")))?;
+        self.pos += used;
+        Ok(tag)
     }
     /// [`Self::nbt`] within `limits`, for a codec whose writer uses the same ones.
     pub fn nbt_within(&mut self, limits: nbt::Limits) -> Result<Tag> {
@@ -816,25 +816,33 @@ mod tests {
     }
 
     #[test]
-    fn network_nbt_holds_no_more_tags_than_vanillas_quota_admits() {
-        // Vanilla charges each tag at least 8 bytes of its 2 MiB quota (EndTag's size; a byte in a
-        // list costs it 13), so it refuses any value with more than 262,144 tags: refused here too,
-        // whatever few bytes they take.
-        assert_eq!(NBT_MAX_TAGS, 262_144);
-        let fits = byte_list(NBT_MAX_TAGS - 1);
+    fn network_nbt_is_bounded_by_vanillas_heap_quota_not_encoded_bytes() {
+        // Vanilla charges a list 36 bytes plus 4 per element, and each byte in it 9: the longest
+        // byte list `ByteBufCodecs.TAG` reads is (2,097,152 - 36) / 13 = 161,316 elements, a few
+        // hundred KB on the wire.
+        let fits = byte_list(161_316);
         let mut r = Reader::new(&fits);
         match r.nbt().unwrap() {
-            Tag::List(values) => assert_eq!(values.len(), NBT_MAX_TAGS - 1),
+            Tag::List(values) => assert_eq!(values.len(), 161_316),
             other => panic!("{other:?}"),
         }
         assert_eq!(r.remaining(), 0);
-        let over = byte_list(NBT_MAX_TAGS);
-        assert!(
-            over.len() < NBT_QUOTA / 4,
-            "a few hundred KB, far under the byte quota"
-        );
-        let refused = Reader::new(&over).nbt().unwrap_err().to_string();
-        assert!(refused.contains("node limit"), "{refused}");
+        let refused = Reader::new(&byte_list(161_317)).nbt().unwrap_err();
+        assert!(refused.to_string().contains("heap quota"), "{refused}");
+
+        // A string costs 36 plus 2 per UTF-16 unit, whatever its encoded length: 33 strings of
+        // 21,845 CJK characters (3 bytes each) are 2,162,727 encoded bytes, past 2 MiB, but
+        // 36 + 33 * (4 + 36 + 2 * 21,845) = 1,443,126 heap bytes, and vanilla reads them.
+        let text = Tag::String("\u{4e2d}".repeat(21_845).as_str().into());
+        let tag = Tag::List(vec![text; 33]);
+        let mut w = Writer::new();
+        w.nbt(&tag);
+        w.i16(0x1234);
+        assert_eq!(w.data.len(), 2_162_727 + 2);
+        let mut r = Reader::new(&w.data);
+        assert_eq!(r.nbt().unwrap(), tag);
+        assert_eq!(r.i16().unwrap(), 0x1234);
+        assert!(check_network_nbt(&tag).is_ok());
     }
 
     #[test]

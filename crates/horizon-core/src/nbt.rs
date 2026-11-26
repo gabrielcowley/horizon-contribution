@@ -258,7 +258,9 @@ impl Default for Limits {
     }
 }
 impl Limits {
-    /// Vanilla's bounded network NBT policy, including the minimum per-tag heap charge.
+    /// 2 MiB of encoded bytes, and as many tags as vanilla's minimum per-tag heap charge admits
+    /// in that much. The network reader does not use it: it charges vanilla's heap quota
+    /// ([`Tag::from_network_bytes`]), which is looser for most data and stricter for none.
     pub const fn network() -> Self {
         Self {
             max_bytes: 2_097_152,
@@ -1144,29 +1146,18 @@ fn write_into(
     result
 }
 
-/// Validate an opaque native component against network limits and a stable disk round trip.
+/// Validate an opaque native component against the network reader's limit (vanilla's
+/// `NbtAccounter.defaultQuota`, charged in heap bytes) and a stable disk round trip.
 pub fn validate_component_value(value: &Tag) -> Result<(), String> {
     if matches!(value, Tag::End) {
         return Err("a component value cannot be NBT End".into());
     }
-    let network = Limits::network();
-    let bytes = write_network(
-        value,
-        Limits {
-            max_bytes: network.max_bytes,
-            ..Limits::default()
-        },
-    )
-    .map_err(|error| format!("NBT: {error}"))?;
-    read_network(&bytes, network).map_err(|error| format!("NBT: {error}"))?;
-    let limits = Limits {
-        max_bytes: network.max_bytes + 2,
-        ..Limits::default()
-    };
+    let bytes = write_network(value, Limits::default()).map_err(|error| format!("NBT: {error}"))?;
+    Tag::from_network_bytes(&bytes, None).map_err(|error| format!("NBT: {error}"))?;
     // Disk NBT canonicalizes NaNs and normalizes negative zero when read.
-    let saved = write_named_parts(&JavaString::default(), value, limits)
+    let saved = write_named_parts(&JavaString::default(), value, Limits::default())
         .map_err(|error| error.to_string())?;
-    let (loaded, _) = read_named(&saved, limits).map_err(|error| error.to_string())?;
+    let (loaded, _) = read_named(&saved, Limits::default()).map_err(|error| error.to_string())?;
     if loaded.tag != *value {
         return Err("component value changes on save and reload".into());
     }

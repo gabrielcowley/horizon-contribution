@@ -150,3 +150,20 @@ fn network_all_variants_and_java_strings_reuse_engine_codec() {
             .is_err()
     );
 }
+
+#[test]
+fn a_component_value_is_held_to_the_heap_quota_not_its_encoded_length() {
+    // 33 strings of 21,845 three-byte characters: 2,162,727 encoded bytes, but
+    // 36 + 33 * (4 + 36 + 2 * 21,845) = 1,443,126 heap bytes, which vanilla's client reads.
+    let text = Tag::String("\u{4e2d}".repeat(21_845).as_str().into());
+    let value = Tag::List(vec![text; 33]);
+    assert_eq!(value.to_network_bytes().unwrap().len(), 2_162_727);
+    assert_eq!(validate_component_value(&value), Ok(()));
+    // A byte array charges 24 plus its length: one byte past the quota is refused.
+    let over = Tag::ByteArray(vec![0; NETWORK_NBT_QUOTA as usize - 24 + 1]);
+    assert!(
+        validate_component_value(&over)
+            .unwrap_err()
+            .contains("heap quota exceeded")
+    );
+}

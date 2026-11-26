@@ -1723,7 +1723,7 @@ package that is not loaded, and `Unavailable` when the engine supplied no data. 
 supplied by the engine and have no game `Host`, handle constructors or transactions. Declarations
 still go on each event or registrar.
 
-- `component_types(context, types)` runs once before content loads. Append namespaced component IDs; duplicates, invalid IDs and the `minecraft` namespace stop startup. `native_component`, `native_set_component` and `native_remove_component` read, set and remove registered components, including item defaults. Values use NBT and must fit the network reader limits.
+- `component_types(context, types)` runs once before content loads. Append namespaced component IDs; duplicates, invalid IDs and the `minecraft` namespace stop startup. `native_component`, `native_set_component` and `native_remove_component` read, set and remove registered components, including item defaults. Values use NBT and must fit the network reader limits: vanilla's 2 MiB `NbtAccounter` heap quota (`NETWORK_NBT_QUOTA`), counted as vanilla counts it, not in encoded bytes.
 
 - [explosions](#explosions) for server mods: `LevelRef::explode(host, source, center, radius, fire, interaction, settings)`
   sets one off as `Level.explode` does, with an optional source entity, `ExplosionInteraction::None`, `Block`, `Mob`, `Tnt`

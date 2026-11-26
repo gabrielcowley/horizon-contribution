@@ -66,19 +66,13 @@ impl Game<'_> {
                 {
                     return Err(TextFormError::TooDeep);
                 }
-                // The network form: a string over 65,535 modified UTF-8 bytes, or a tag past the
-                // network limits, is not written (an End tag goes out instead).
-                // What is written must also be read by the client under vanilla's heap quota (2 MiB of
-                // `NbtAccounter` bytes): the written bytes are read back with `from_network_bytes(.., None)`,
-                // which accounts the heap (the reader inside `check_network_nbt` does not).
-                if tags.iter().any(|tag| {
-                    horizon_core::nbt::write_network(tag, horizon_core::nbt::Limits::network())
-                        .ok()
-                        .and_then(|bytes| {
-                            horizon_core::nbt::Tag::from_network_bytes(&bytes, None).ok()
-                        })
-                        .is_none()
-                }) {
+                // The network form: a string over 65,535 modified UTF-8 bytes is not written (an
+                // End tag goes out instead), and what is written must be read by the client under
+                // vanilla's heap quota (2 MiB of `NbtAccounter` bytes).
+                if tags
+                    .iter()
+                    .any(|tag| horizon_protocol::buf::check_network_nbt(tag).is_err())
+                {
                     return Err(TextFormError::Malformed);
                 }
                 Some(NativeSidebar { title, lines })

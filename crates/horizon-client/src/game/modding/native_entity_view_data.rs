@@ -1,6 +1,6 @@
 //! `player_send_entity_data`: one viewer is sent different data for an entity than the others.
 use super::Game;
-use horizon_core::nbt::{Limits, Tag, write_network};
+use horizon_core::nbt::Tag;
 use horizon_protocol::{
     entity_data::{Value, serializer},
     packets::play::{self, Clientbound as C},
@@ -32,14 +32,10 @@ fn pose_id(pose: Pose) -> i32 {
 }
 
 /// Whether the packet writer carries `tag` and the client reads it back under vanilla's limits:
-/// a string over 65,535 modified UTF-8 bytes or a tag past the network limits is not written (an
-/// End tag goes out instead), and the written bytes must fit the 2 MiB `NbtAccounter` heap quota
-/// (`from_network_bytes(.., None)` accounts it). That quota is also far below the packet size cap.
+/// a string over 65,535 modified UTF-8 bytes is not written (an End tag goes out instead), and
+/// the written bytes must fit the 2 MiB `NbtAccounter` heap quota (`buf::check_network_nbt`).
 fn network_encodable(tag: &Tag) -> bool {
-    write_network(tag, Limits::network())
-        .ok()
-        .and_then(|bytes| Tag::from_network_bytes(&bytes, None).ok())
-        .is_some()
+    horizon_protocol::buf::check_network_nbt(tag).is_ok()
 }
 
 /// Whether the whole encoded packet (id varint included) fits one frame with compression off,
