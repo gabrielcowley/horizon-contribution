@@ -4,16 +4,20 @@
 //! NeoForge oracle exported.
 //!
 //! cargo run -p horizon-client-lib --example mod_port_probe -- PREPARED WORK OUT.json [MOD...]
-//! cargo run -p horizon-client-lib --example mod_port_probe -- --root ROOT WORK OUT.json --namespace NS...
+//! cargo run -p horizon-client-lib --example mod_port_probe -- --root ROOT PREPARED WORK OUT.json --mod DIR...
 //!
 //! WORK is a `horizon-port-pack` work folder: `oracle/facts.json` and
 //! `mods/<id>/carry/`. The root is built in `WORK/horizon-root`.
 //!
 //! With `--root`, the probe builds nothing: ROOT is a content root the game
-//! already built (its log names it: `content from N mod(s) in ROOT`), so it
-//! holds what a native mod declares in code (`native_blocks`, `native_items`)
-//! as well as its files. WORK then needs only `oracle/facts.json`, and the
-//! blocks, items, recipes and tags written are those of each `--namespace`.
+//! already built over PREPARED (its log names it: `content from N mod(s) in
+//! ROOT`), so it holds what a native mod declares in code (`BlocksEvent`,
+//! `ItemsEvent`). Each `--mod` is the folder of a package that root holds; the
+//! probe reads its `data/` over the root as the game does, and writes the facts
+//! of the namespaces it owns. WORK then needs only `oracle/facts.json`.
+//!
+//! Either way the loaders read the mods' data files through the pack overlay
+//! the game builds from them: the root holds only what its builder generated.
 extern crate horizon_client_lib as horizon_client;
 use horizon_client::{
     Result,
@@ -78,32 +82,57 @@ fn main() -> Result<()> {
     let args = Args::parse(std::env::args().skip(1))?;
     let (work, out) = (Path::new(&args.work), args.out.as_str());
     let oracle: Value = serde_json::from_slice(&fs::read(work.join("oracle/facts.json"))?)?;
+    let base = Path::new(&args.base);
+    let jar_store = horizon_client::logging::game_home().join("jars");
     let began = std::time::Instant::now();
-    let (root, namespaces) = match &args.source {
-        Source::Built { root, namespaces } => (root.clone(), namespaces.clone()),
-        Source::Packages { base, wanted } => (
-            work.join("horizon-root"),
-            build_root(Path::new(base), work, wanted)?,
+    let (root, mods) = match &args.source {
+        Source::Built { root, mods } => (
+            root.clone(),
+            mods.iter()
+                .map(|dir| read_mod(dir, true))
+                .collect::<Result<Vec<_>>>()?,
         ),
+        Source::Packages { wanted } => {
+            let mods = carried(work, wanted)?;
+            let root = work.join("horizon-root");
+            let inventory = horizon_mod_package::enabled::EnabledMods::new(
+                mods.iter().map(|(m, side)| (m.id.clone(), *side)),
+            );
+            let mods: Vec<ContentMod> = mods.into_iter().map(|(m, _)| m).collect();
+            mod_content::build(base, &jar_store, &mods, &root, &inventory)
+                .map_err(step("content root"))?;
+            (root, mods)
+        }
     };
     let built = began.elapsed().as_secs_f64();
+    let files = data_overlay(base, &root, &jar_store, &mods, work).map_err(step("mod data"))?;
+    let inventory = horizon_mod_package::enabled::EnabledMods::read(&root)
+        .map_err(|e| format!("{}: enabled mods: {e}", root.display()))?;
+    let conditions = horizon_world::conditions::LoadConditions::new(inventory.server_ids());
+    let overlay = PackOverlay {
+        conditions: &conditions,
+        files: &files,
+    };
+    let namespaces: Vec<&str> = mods
+        .iter()
+        .flat_map(|m| m.content.namespaces.iter().map(String::as_str))
+        .collect();
     let assets = Assets::load(&root).map_err(step("assets"))?;
     let registry = assets.registry;
     let facts = BlockFacts::load(&root, registry).map_err(step("block facts"))?;
     let defaults =
         horizon_world::item_defaults::read(&root).map_err(|error| format!("items: {error}"))?;
-    let items = Items::load(&root, registry, &facts, &PackOverlay::NONE, &defaults)
-        .map_err(step("items"))?;
-    let recipes = Recipes::load(&root, &items, &PackOverlay::NONE, &server_load())
-        .map_err(step("recipes"))?;
-    let stations = StationRecipes::load(&root, &items, &PackOverlay::NONE, &server_load());
+    let items = Items::load(&root, registry, &facts, &overlay, &defaults).map_err(step("items"))?;
+    let recipes =
+        Recipes::load(&root, &items, &overlay, &server_load()).map_err(step("recipes"))?;
+    let stations = StationRecipes::load(&root, &items, &overlay, &server_load());
     let enchantments = Enchantments::load(&root, &defaults)?;
     let collisions =
         horizon_client::collisions::load(&root, registry).map_err(step("collisions"))?;
     let loaded = began.elapsed().as_secs_f64() - built;
     let ours = |id: &str| {
         id.split_once(':')
-            .is_some_and(|(ns, _)| namespaces.iter().any(|n| n == ns))
+            .is_some_and(|(ns, _)| namespaces.contains(&ns))
     };
     let tools: Vec<String> = serde_json::from_value(oracle["tools"].clone())?;
 
@@ -330,90 +359,116 @@ fn step(what: &str) -> impl FnOnce(Box<dyn std::error::Error>) -> String {
 /// Where the content root comes from.
 enum Source {
     /// Built here from WORK's carried content packages (`MOD...`, or all of them).
-    Packages { base: String, wanted: Vec<String> },
-    /// A root the game already built, probed for these namespaces.
+    Packages { wanted: Vec<String> },
+    /// A root the game already built, with the folders of the packages it holds.
     Built {
         root: std::path::PathBuf,
-        namespaces: Vec<String>,
+        mods: Vec<std::path::PathBuf>,
     },
 }
 
 struct Args {
     source: Source,
+    base: String,
     work: String,
     out: String,
 }
 
 impl Args {
     const USAGE: &str = "usage: mod_port_probe PREPARED WORK OUT.json [MOD...]\n       \
-                         mod_port_probe --root ROOT WORK OUT.json --namespace NS...";
+                         mod_port_probe --root ROOT PREPARED WORK OUT.json --mod DIR...";
 
     fn parse(args: impl Iterator<Item = String>) -> Result<Args> {
-        let (mut root, mut namespaces, mut positional) = (None, Vec::new(), Vec::new());
+        let (mut root, mut mods, mut positional) = (None, Vec::new(), Vec::new());
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--root" => root = Some(args.next().ok_or(Self::USAGE)?),
-                "--namespace" => namespaces.push(args.next().ok_or(Self::USAGE)?),
+                "--mod" => mods.push(args.next().ok_or(Self::USAGE)?.into()),
                 _ => positional.push(arg),
             }
         }
-        match (root, positional.as_slice()) {
-            (Some(root), [work, out]) if !namespaces.is_empty() => Ok(Args {
-                source: Source::Built {
+        let (source, rest) = match (root, positional.as_slice()) {
+            (Some(root), [base, work, out]) if !mods.is_empty() => (
+                Source::Built {
                     root: root.into(),
-                    namespaces,
+                    mods,
                 },
-                work: work.clone(),
-                out: out.clone(),
-            }),
-            (None, [base, work, out, wanted @ ..]) if namespaces.is_empty() => Ok(Args {
-                source: Source::Packages {
-                    base: base.clone(),
+                [base, work, out],
+            ),
+            (None, [base, work, out, wanted @ ..]) if mods.is_empty() => (
+                Source::Packages {
                     wanted: wanted.to_vec(),
                 },
-                work: work.clone(),
-                out: out.clone(),
-            }),
-            _ => Err(Self::USAGE.into()),
-        }
+                [base, work, out],
+            ),
+            _ => return Err(Self::USAGE.into()),
+        };
+        let [base, work, out] = rest.map(Clone::clone);
+        Ok(Args {
+            source,
+            base,
+            work,
+            out,
+        })
     }
 }
 
-/// Builds `WORK/horizon-root` from the carried content packages over PREPARED and
-/// returns the namespaces they own.
-fn build_root(base: &Path, work: &Path, wanted: &[String]) -> Result<Vec<String>> {
+/// One package folder as the game reads it. `server` keeps only the jars a
+/// server loads: a root a headless game built never fetched client-only ones.
+fn read_mod(dir: &Path, server: bool) -> Result<ContentMod> {
+    let package = horizon_mod_package::Package::read(dir)?;
+    let content = horizon_mod_package::Content::read(dir, &package.manifest)?;
+    let jars = (package.manifest.jar.into_iter())
+        .filter(|jar| !server || jar.needed_on(horizon_mod_package::manifest::Side::Server))
+        .collect();
+    Ok(ContentMod {
+        id: package.manifest.id,
+        content,
+        jars,
+    })
+}
+
+/// WORK's carried content packages (`MOD...`, or all of them), by id, with
+/// each one's side.
+fn carried(
+    work: &Path,
+    wanted: &[String],
+) -> Result<Vec<(ContentMod, horizon_mod_package::manifest::Side)>> {
     let mut mods = Vec::new();
-    let mut inventory = Vec::new();
     for entry in fs::read_dir(work.join("mods"))?.flatten() {
         let id = entry.file_name().to_string_lossy().into_owned();
         let dir = entry.path().join("carry");
         if !(wanted.is_empty() || wanted.contains(&id)) || !dir.is_dir() {
             continue;
         }
-        let package = horizon_mod_package::Package::read(&dir)?;
-        let content = horizon_mod_package::Content::read(&dir, &package.manifest)?;
-        inventory.push((package.manifest.id.clone(), package.manifest.side));
-        mods.push(ContentMod {
-            id: package.manifest.id.clone(),
-            content,
-            jars: package.manifest.jar,
-        });
+        let side = horizon_mod_package::Package::read(&dir)?.manifest.side;
+        mods.push((read_mod(&dir, false)?, side));
     }
-    mods.sort_by(|a, b| a.id.cmp(&b.id));
-    let root = work.join("horizon-root");
-    mod_content::build(
+    mods.sort_by(|a, b| a.0.id.cmp(&b.0.id));
+    Ok(mods)
+}
+
+/// The data files the game's tables load over ROOT: each mod's `data/` with
+/// what the root's builder generated on top (`resolved_resources`'s data
+/// changes, the content pack of the game's pack stack).
+fn data_overlay(
+    base: &Path,
+    root: &Path,
+    jar_store: &Path,
+    mods: &[ContentMod],
+    work: &Path,
+) -> Result<Vec<(String, Vec<Vec<u8>>)>> {
+    use horizon_client::datapack::{DataPack, DataStore};
+    let resources = mod_content::resolved_resources(
         base,
-        &horizon_client::logging::game_home().join("jars"),
-        &mods,
-        &root,
-        &horizon_mod_package::enabled::EnabledMods::new(inventory),
-    )
-    .map_err(step("content root"))?;
-    Ok(mods
-        .into_iter()
-        .flat_map(|m| m.content.namespaces)
-        .collect())
+        root.to_path_buf(),
+        jar_store,
+        mods,
+        work.join("probe-cache"),
+    )?;
+    let content = DataPack::from_source("horizon-content".into(), resources.data_changes().clone());
+    Ok(DataStore::load(&[&content]).files.into_iter().collect())
 }
 
 fn server_load() -> horizon_world::native_load_context::LoadContext {

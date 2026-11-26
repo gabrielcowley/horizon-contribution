@@ -894,10 +894,12 @@ python3 tools/mod_port_harness.py --work <work>      # or --jars/--deps to expor
   with the seven mods below takes about 30 s.
 - `crates/horizon-client/examples/mod_port_probe.rs` builds the content root from the carried
   mods and dumps what Horizon's loaders make of the same blocks, drops, recipes and tags.
-  A native mod's blocks and items can come from its code (`native_blocks`, `native_items`), which
-  only the running game asks. To probe one, start the game with it (headless is enough), take the
-  root its log names (`content from N mod(s) in ROOT`), and pass that instead:
-  `mod_port_probe --root ROOT WORK OUT.json --namespace <ns>`. WORK then needs only
+  The loaders read the mods' `data/` (recipes, loot tables, tags) through the pack overlay the
+  game builds from the root's resolved resources, since the root holds only what its builder
+  generated. A native mod's blocks and items can come from its code (`BlocksEvent`, `ItemsEvent`),
+  which only the running game asks. To probe one, start the game with it (headless is enough), take
+  the root its log names (`content from N mod(s) in ROOT`), and pass that with the mod's package
+  folder: `mod_port_probe --root ROOT PREPARED WORK OUT.json --mod DIR`. WORK then needs only
   `oracle/facts.json`, and `compare_mod` reads the output as it reads a content mod's.
 - `tools/mod_port_harness.py` compares them per mod (blocks, properties, sounds, shapes, drops,
   placement against the template's in the oracle, vanilla tags, recipes, items) and writes
