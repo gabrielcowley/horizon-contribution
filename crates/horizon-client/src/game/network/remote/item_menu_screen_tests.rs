@@ -23,6 +23,7 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     sync::{
+        Mutex,
         atomic::{AtomicUsize, Ordering},
         mpsc,
     },
@@ -33,9 +34,13 @@ const MACHINE: &str = "packtest:machine";
 const CHEST_BLOCK: &str = "packtest:chest";
 const CHEST_MENU: &str = "minecraft:generic_9x1";
 const MACHINE_POS: Pos = (1, 64, 1);
+/// Where an item menu's opener says it was opened: no block is there.
+const OPENER_POS: [i32; 3] = [5, 64, 5];
 const CHILD_CASE: &str = "HORIZON_ITEM_MENU_SCREEN_CASE";
 static BLOCK_DRAWS: AtomicUsize = AtomicUsize::new(0);
 static ITEM_DRAWS: AtomicUsize = AtomicUsize::new(0);
+/// What `screen_pos` read in the last `menu_screen` call.
+static MENU_SCREEN_POS: Mutex<Option<Option<[i32; 3]>>> = Mutex::new(None);
 
 struct Storage;
 #[mod_api::horizon_part]
@@ -46,6 +51,7 @@ impl MenuPart for Storage {
         event: &mut MenuScreenEvent<'_>,
     ) -> Option<mod_api::Screen> {
         assert_eq!(event.menu, MENU);
+        *MENU_SCREEN_POS.lock().unwrap() = Some(host.screen_pos());
         // The opener's extra picks the layout: [9] shows the first slot only.
         let slots = match host.screen_extra_data().as_deref() {
             Some([9]) => vec![Some([29.0, 20.0])],
@@ -211,7 +217,7 @@ fn take_menu_packets(rx: &mpsc::Receiver<Out>) -> Vec<C> {
         .collect()
 }
 
-fn open_item_menu(game: &mut Game<'_>, uuid: u128, extra: u8) -> i32 {
+fn open_item_menu(game: &mut Game<'_>, uuid: u128, extra: u8, pos: Option<[i32; 3]>) -> i32 {
     let host: &mut dyn ServerHost = game;
     let player = host.player(uuid).unwrap();
     let menu = host
@@ -225,13 +231,22 @@ fn open_item_menu(game: &mut Game<'_>, uuid: u128, extra: u8) -> i32 {
             menu,
             mod_api::Text::literal("Held storage"),
             vec![extra],
-            None,
+            pos,
             MenuReplace::InPlace,
         )
         .unwrap()
         .unwrap();
     back_held_slots(host, player, window);
     window
+}
+
+/// What the last `menu_screen` call read with `screen_pos`, taken.
+fn menu_screen_pos() -> Option<[i32; 3]> {
+    MENU_SCREEN_POS
+        .lock()
+        .unwrap()
+        .take()
+        .expect("menu_screen was asked")
 }
 
 fn back_held_slots(host: &mut dyn ServerHost, player: mod_api::PlayerRef, window: i32) {
@@ -249,6 +264,7 @@ struct MenuPackets {
     item: Vec<C>,
     after_move: Vec<C>,
     hidden_layout: Vec<C>,
+    with_pos: Vec<C>,
     chest_block: Vec<C>,
     chest_item: Vec<C>,
 }
@@ -277,7 +293,8 @@ fn server_menu_packets(game: &mut Game<'_>, conn: u32) -> MenuPackets {
     assert_eq!(game.native_hidden_slots(MACHINE_POS, 2), [1]);
     let block = take_menu_packets(&rx);
 
-    let window = open_item_menu(game, uuid, 7);
+    let window = open_item_menu(game, uuid, 7, None);
+    assert_eq!(menu_screen_pos(), None, "the opener gave no pos");
     let item = take_menu_packets(&rx);
     let state = item
         .iter()
@@ -316,7 +333,7 @@ fn server_menu_packets(game: &mut Game<'_>, conn: u32) -> MenuPackets {
     let after_move = take_menu_packets(&rx);
 
     // Opened with [9], the layout hides slot 1: the server's menu takes nothing into it.
-    let window = open_item_menu(game, uuid, 9);
+    let window = open_item_menu(game, uuid, 9, None);
     let hidden_layout = take_menu_packets(&rx);
     let state = hidden_layout
         .iter()
@@ -359,6 +376,12 @@ fn server_menu_packets(game: &mut Game<'_>, conn: u32) -> MenuPackets {
     assert_eq!(held_slot(1).amount(game), 0, "a hidden slot is never filled");
     assert_eq!(held_slot(0).amount(game), 7);
     let _ = take_menu_packets(&rx);
+
+    // Opened with a pos where no block is, menu_screen reads it with screen_pos.
+    open_item_menu(game, uuid, 5, Some(OPENER_POS));
+    assert_eq!(menu_screen_pos(), Some(OPENER_POS), "the server reads the opener's pos");
+    let with_pos = take_menu_packets(&rx);
+
     place_machine(game, CHEST_BLOCK, 9);
     assert!(game.lan_open_container(conn, MACHINE_POS));
     let chest_block = take_menu_packets(&rx);
@@ -383,6 +406,7 @@ fn server_menu_packets(game: &mut Game<'_>, conn: u32) -> MenuPackets {
         item,
         after_move,
         hidden_layout,
+        with_pos,
         chest_block,
         chest_item,
     }
@@ -441,6 +465,12 @@ fn check_client_menus(game: &mut Game<'_>, packets: MenuPackets) {
     apply(game, packets.hidden_layout);
     assert_eq!(game.screen_extra_data(), Some(vec![9]));
     assert_eq!(game.native_screen_slots(), Some(vec![300]));
+
+    // Opened with a pos where no block is, the client's menu_screen reads it too.
+    let _ = MENU_SCREEN_POS.lock().unwrap().take();
+    apply(game, packets.with_pos);
+    assert_eq!(menu_screen_pos(), Some(OPENER_POS), "the client reads the opener's pos");
+    assert_eq!(game.native_screen_slots(), Some(vec![300, 301]));
 
     check_chest_screen_origins(game, packets.chest_block, packets.chest_item);
 }
