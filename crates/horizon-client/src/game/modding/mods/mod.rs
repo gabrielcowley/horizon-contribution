@@ -1307,7 +1307,13 @@ fn register_mob_effects(mods: &[horizon_client::mod_content::ContentMod]) {
             EffectCategory::Harmful => Category::Harmful,
             EffectCategory::Neutral => Category::Neutral,
         };
-        (owner.to_owned(), e.id.clone(), e.color, category, e.sort_order)
+        (
+            owner.to_owned(),
+            e.id.clone(),
+            e.color,
+            category,
+            e.sort_order,
+        )
     }));
     if !set
         && brewing::mod_effects()
@@ -2748,6 +2754,7 @@ mod tests {
                         &horizon_mod_package::content::FluidLook {
                             id: "reload_fluid:oil".into(),
                             sprite: None,
+                            flowing: None,
                             tint: None,
                             light_level: 0,
                             lighter_than_air: false,

@@ -7,6 +7,10 @@
 //! gives a fluid's still sprite and item tint, and [`held_fluid`] the fluid a vanilla bucket holds.
 //! Items are drawn every frame, so their answers are resolved once per load, by the same two
 //! calls that store the looks and models ([`FluidData`]).
+//!
+//! A mod's tanks, streams and GUI slots read it too: [`draw_look`] gives any fluid's still and
+//! flowing sprites and its tint, and [`stack_tint`] the tint of one stack, after the fluid's
+//! parts have answered `fluid_tint`.
 use horizon_assets::item_model::FluidAppearance;
 use horizon_mod_package::content::{FluidLook, FluidModel, namespaced_id};
 use std::collections::HashMap;
@@ -27,6 +31,8 @@ struct FluidData {
     registered: Vec<FluidModel>,
     /// [`item_appearance`]'s answers by fluid id, vanilla's included.
     items: HashMap<String, FluidAppearance>,
+    /// [`draw_look`]'s answers by fluid id, vanilla's included.
+    draws: HashMap<String, FluidDrawLook>,
 }
 
 impl FluidData {
@@ -36,6 +42,7 @@ impl FluidData {
             tank_looks: Vec::new(),
             registered: Vec::new(),
             items: HashMap::new(),
+            draws: HashMap::new(),
         };
         data.reindex();
         data
@@ -57,12 +64,16 @@ impl FluidData {
     /// table and win over a look of the same id. `FluidStateModelSet.bake` maps a fluid and
     /// its flowing form to one model, so both ids answer alike, a mod's as vanilla's.
     fn reindex(&mut self) {
+        let mut draws = HashMap::new();
         let mut items: HashMap<String, FluidAppearance> = self
             .looks
             .iter()
             .flat_map(|look| {
                 // The load's `resolved` already warned about bad sprite ids.
                 let model = resolve_look(look, &self.registered, false);
+                let drawn = FluidDrawLook::of(&model);
+                draws.insert(look.flowing_id(), drawn.clone());
+                draws.insert(look.id.clone(), drawn);
                 let tint = match model.tint {
                     FluidTint::Fixed(rgb) => (0xFF00_0000 | rgb) as i32,
                     FluidTint::Biome => WATER_ITEM_TINT,
@@ -81,6 +92,9 @@ impl FluidData {
         // no world fluid), so its look alone decides, by the same rule as a world fluid's.
         for look in &self.tank_looks {
             let model = resolve_look(look, &[], false);
+            draws
+                .entry(look.id.clone())
+                .or_insert_with(|| FluidDrawLook::of(&model));
             let tint = match model.tint {
                 FluidTint::Fixed(rgb) => (0xFF00_0000 | rgb) as i32,
                 FluidTint::Biome => WATER_ITEM_TINT,
@@ -110,7 +124,63 @@ impl FluidData {
                 items.insert(fluid.to_owned(), appearance);
             }
         }
+        for (fluid, still, flowing, tint) in [
+            (
+                "minecraft:water",
+                "water_still",
+                "water_flow",
+                WATER_ITEM_TINT as u32,
+            ),
+            (
+                "minecraft:flowing_water",
+                "water_still",
+                "water_flow",
+                WATER_ITEM_TINT as u32,
+            ),
+            ("minecraft:lava", "lava_still", "lava_flow", u32::MAX),
+            (
+                "minecraft:flowing_lava",
+                "lava_still",
+                "lava_flow",
+                u32::MAX,
+            ),
+        ] {
+            draws.insert(
+                fluid.to_owned(),
+                FluidDrawLook {
+                    still: format!("minecraft:block/{still}"),
+                    flowing: format!("minecraft:block/{flowing}"),
+                    tint,
+                },
+            );
+        }
         self.items = items;
+        self.draws = draws;
+    }
+}
+
+impl FluidData {
+    fn draw_look(&self, fluid: &str) -> FluidDrawLook {
+        self.draws
+            .get(fluid)
+            .cloned()
+            .unwrap_or_else(|| FluidDrawLook {
+                still: "minecraft:block/water_still".into(),
+                flowing: "minecraft:block/water_flow".into(),
+                tint: WATER_ITEM_TINT as u32,
+            })
+    }
+    fn sprite_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = resolve(&self.looks, &self.registered)
+            .into_iter()
+            .flat_map(|model| [Some(model.still), Some(model.flowing), model.overlay])
+            .flatten()
+            .collect();
+        for look in &self.tank_looks {
+            let model = resolve_look(look, &[], false);
+            names.extend([model.still, model.flowing]);
+        }
+        names
     }
 }
 
@@ -159,6 +229,12 @@ pub fn resolved() -> Vec<ResolvedFluidModel> {
     resolve(&data.looks, &data.registered)
 }
 
+/// Every mod fluid sprite the block sprite arrays need: each world fluid's model's, and the
+/// still and flowing sprites of each fluid only a tank holds, which a tank or a stream draws.
+pub fn sprite_names() -> Vec<String> {
+    data().sprite_names()
+}
+
 fn resolve(looks: &[FluidLook], registered: &[FluidModel]) -> Vec<ResolvedFluidModel> {
     for model in registered {
         if !looks.iter().any(|look| look.id == model.fluid) {
@@ -189,7 +265,8 @@ fn resolve_look(look: &FluidLook, registered: &[FluidModel], warn: bool) -> Reso
         .cloned()
     };
     let overlay = sprite(model.and_then(|model| model.overlay.as_ref()));
-    let flowing = sprite(model.and_then(|model| model.flowing.as_ref()));
+    let flowing = sprite(model.and_then(|model| model.flowing.as_ref()))
+        .or_else(|| sprite(look.flowing.as_ref()));
     let still = sprite(model.and_then(|model| model.still.as_ref()))
         .or_else(|| sprite(look.sprite.as_ref()));
     let fixed = look.tint.map(|tint| FluidTint::Fixed(tint & 0xFF_FFFF));
@@ -233,6 +310,59 @@ pub fn item_appearance(fluid: &str) -> Option<FluidAppearance> {
     data().items.get(fluid).cloned()
 }
 
+/// What a fluid draws with outside the world: in a tank (`fluid_box`), as a stream between
+/// machines (`fluid_stream`) and in a GUI slot (`fluid_stack`). NeoForge's
+/// `IClientFluidTypeExtensions`: `getStillTexture`, `getFlowingTexture` and `getTintColor`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FluidDrawLook {
+    /// The still sprite, a block sprite (`minecraft:block/water_still`).
+    pub still: String,
+    /// The flowing sprite, a block sprite (`minecraft:block/water_flow`).
+    pub flowing: String,
+    /// `0xAARRGGBB`, always opaque: what a stack is tinted with when no part answers
+    /// `fluid_tint`. Water's is its item colour, never the biome's; lava's is white.
+    pub tint: u32,
+}
+
+impl FluidDrawLook {
+    /// A mod fluid's, from its model: the model's sprites, and its fixed tint made opaque, or
+    /// water's item colour when it takes the biome's, as an item draws it.
+    fn of(model: &ResolvedFluidModel) -> Self {
+        Self {
+            still: model.still.clone(),
+            flowing: model.flowing.clone(),
+            tint: match model.tint {
+                FluidTint::Fixed(rgb) => 0xFF00_0000 | rgb,
+                FluidTint::Biome => WATER_ITEM_TINT as u32,
+            },
+        }
+    }
+}
+
+/// What `fluid` draws with outside the world ([`FluidDrawLook`]): vanilla's water and lava, a
+/// mod's fluid by its look and model, a flowing form as its source. A fluid no look names,
+/// a tank-only fluid declared in code alone, draws with water's sprites and colour, as a look
+/// that names neither sprite nor tint does. One read lock and one hash lookup.
+pub fn draw_look(fluid: &str) -> FluidDrawLook {
+    data().draw_look(fluid)
+}
+
+/// The `0xAARRGGBB` tint `stack` of `fluid` draws with: the first answer of the fluid's parts to
+/// `fluid_tint`, else its look's ([`draw_look`]). NeoForge's `getTintColor(FluidStack)`.
+pub fn stack_tint(fluid: &str, stack: &mod_api::FluidStack, look: &FluidDrawLook) -> u32 {
+    let mut tint = None;
+    native_fluid_tint(fluid, stack, &mut tint);
+    tint.unwrap_or(look.tint)
+}
+
+/// Hook point for mods (declared in `hooks/fluid_tint.rs`): the tint of `stack`, a stack of
+/// `fluid`, is being read to draw it in a tank, a stream or a GUI slot. Its parts may set `tint`.
+#[inline(never)]
+pub fn native_fluid_tint(fluid: &str, stack: &mod_api::FluidStack, tint: &mut Option<u32>) {
+    // The dispatch returns at once when no part listens.
+    mod_api::dispatch_fluid_tint(fluid, stack, tint);
+}
+
 /// The fluid a vanilla bucket holds: NeoForge registers `BucketResourceHandler` for every item
 /// whose class is exactly `BucketItem` (`CapabilityHooks.registerFallbackVanillaProviders`), and
 /// its `getResourceFrom` answers `BucketItem.content`. The empty bucket's content is
@@ -256,6 +386,7 @@ mod tests {
         FluidLook {
             id: id.into(),
             sprite: sprite.map(Into::into),
+            flowing: None,
             tint,
             light_level: 0,
             lighter_than_air: false,
@@ -497,5 +628,174 @@ mod tests {
         );
         assert_eq!(drawn.len(), 1);
         assert_eq!(drawn[0].still, "a:block/oil");
+    }
+
+    /// What a tank, a stream and a GUI slot draw for vanilla's fluids: water's still and
+    /// flowing sprites in its item colour, never the biome's, and lava's in white, each
+    /// flowing form as its source.
+    #[test]
+    fn vanilla_fluids_draw_their_own_sprites_outside_the_world() {
+        let data = FluidData::new();
+        let water = FluidDrawLook {
+            still: "minecraft:block/water_still".into(),
+            flowing: "minecraft:block/water_flow".into(),
+            tint: 0xFF3F_76E4,
+        };
+        assert_eq!(data.draw_look("minecraft:water"), water);
+        assert_eq!(data.draw_look("minecraft:flowing_water"), water);
+        let lava = FluidDrawLook {
+            still: "minecraft:block/lava_still".into(),
+            flowing: "minecraft:block/lava_flow".into(),
+            tint: 0xFFFF_FFFF,
+        };
+        assert_eq!(data.draw_look("minecraft:lava"), lava);
+        assert_eq!(data.draw_look("minecraft:flowing_lava"), lava);
+    }
+
+    /// A mod's fluid draws its look's flowing sprite in a stream, unless a registered model names
+    /// another; with none, its still sprite flows too. Its tint is made opaque; a look with
+    /// neither sprite nor tint, and a fluid no look names, draw as water does.
+    #[test]
+    fn a_mod_fluid_streams_its_flowing_sprite_and_tints_opaque() {
+        let mut data = FluidData::new();
+        let flowing = |id: &str, flowing: &str| FluidLook {
+            flowing: Some(flowing.into()),
+            ..look(id, Some(&format!("{id}_still")), Some(0x8011_2233))
+        };
+        data.set_looks(&[
+            flowing("a:honey", "a:honey_flow"),
+            flowing("a:oil", "a:oil_flow"),
+            look("a:tar", Some("a:tar_still"), None),
+            look("a:plain", None, None),
+            FluidLook {
+                world: None,
+                ..flowing("a:tea", "a:tea_flow")
+            },
+        ]);
+        data.set_registered(vec![FluidModel {
+            flowing: Some("a:oil_model_flow".into()),
+            ..model("a:oil")
+        }]);
+        let drawn = |fluid| {
+            let look = data.draw_look(fluid);
+            (look.still, look.flowing, look.tint)
+        };
+        assert_eq!(
+            drawn("a:honey"),
+            ("a:honey_still".into(), "a:honey_flow".into(), 0xFF11_2233)
+        );
+        assert_eq!(drawn("a:flowing_honey"), drawn("a:honey"));
+        assert_eq!(drawn("a:oil").1, "a:oil_model_flow");
+        assert_eq!(
+            drawn("a:tar"),
+            ("a:tar_still".into(), "a:tar_still".into(), 0xFFFF_FFFF)
+        );
+        assert_eq!(
+            drawn("a:tea"),
+            ("a:tea_still".into(), "a:tea_flow".into(), 0xFF11_2233),
+            "a tank-only fluid streams too"
+        );
+        let water = (
+            "minecraft:block/water_still".to_owned(),
+            "minecraft:block/water_flow".to_owned(),
+            0xFF3F_76E4,
+        );
+        assert_eq!(drawn("a:plain"), water);
+        assert_eq!(drawn("a:declared_in_code_alone"), water);
+    }
+
+    /// The block sprite arrays take a tank-only fluid's sprites as well as the world fluids',
+    /// so a tank and a stream can draw it.
+    #[test]
+    fn a_tank_only_fluids_sprites_join_the_block_sprites() {
+        let mut data = FluidData::new();
+        data.set_looks(&[
+            look("a:oil", Some("a:block/oil"), None),
+            FluidLook {
+                world: None,
+                flowing: Some("a:fluid/tea_flow".into()),
+                ..look("a:tea", Some("a:fluid/tea_still"), None)
+            },
+        ]);
+        let names = data.sprite_names();
+        for name in ["a:block/oil", "a:fluid/tea_still", "a:fluid/tea_flow"] {
+            assert!(names.iter().any(|n| n == name), "{name} in {names:?}");
+        }
+    }
+
+    /// `fluid_tint`: a stack's colour is the first answer of its fluid's parts, in dispatch
+    /// order, read from the stack itself (its components here); a part answering `None` leaves
+    /// it to the next, and a fluid no part answers for keeps its look's tint.
+    #[test]
+    fn the_first_part_to_answer_tints_a_stack_by_its_components() {
+        use mod_api::{FluidPart, FluidTintEvent, Hooks, ModEntry, Registrar, RegistrationContext};
+        struct Brewed;
+        #[mod_api::horizon_part]
+        impl FluidPart for Brewed {
+            fn fluid_tint(&self, event: &mut FluidTintEvent<'_>) -> Option<u32> {
+                assert_eq!(event.fluid, "brew:tea");
+                event.stack.has_components().then_some(0xFF80_4020)
+            }
+        }
+        struct Steeped;
+        #[mod_api::horizon_part]
+        impl FluidPart for Steeped {
+            fn fluid_tint(&self, _: &mut FluidTintEvent<'_>) -> Option<u32> {
+                Some(0xFF00_FF00)
+            }
+        }
+        struct Brew;
+        #[mod_api::__subscriptions]
+        impl Hooks for Brew {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+                r.declare_fluid("tea");
+                r.fluid_part("brew:tea", Brewed);
+            }
+        }
+        struct Steep;
+        #[mod_api::__subscriptions]
+        impl Hooks for Steep {
+            fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+                r.fluid_part("brew:tea", Steeped);
+            }
+        }
+        mod_platform::__private::part_tests::game_thread();
+        let mods: mod_api::Mods = vec![
+            ModEntry::new("brew", Box::new(Brew)),
+            ModEntry::new("steep", Box::new(Steep)),
+        ]
+        .into();
+        mod_platform::testing::with_mods(mods.clone(), || {
+            mod_platform::__private::part_tests::install_parts_fixture(&mods).unwrap();
+            mod_api::__private::resolve_fluids(&["minecraft:water", "minecraft:lava"], &[])
+                .unwrap();
+            let key = |id| mod_api::__private::fluid_key(id).unwrap();
+            let data = FluidData::new();
+            let plain = mod_api::FluidStack::new(key("brew:tea"), 250);
+            let brewed = {
+                use horizon_core::nbt::{Compound, Tag};
+                let mut components = Compound::new();
+                components.insert(
+                    "minecraft:custom_data".into(),
+                    Tag::Compound(Compound::new()),
+                );
+                mod_api::FluidStack {
+                    components: Some(Box::new(components.into())),
+                    ..plain.clone()
+                }
+            };
+            let tea = data.draw_look("brew:tea");
+            assert_eq!(stack_tint("brew:tea", &brewed, &tea), 0xFF80_4020);
+            assert_eq!(stack_tint("brew:tea", &plain, &tea), 0xFF00_FF00);
+            let water = mod_api::FluidStack::new(key("minecraft:water"), 1000);
+            assert_eq!(
+                stack_tint(
+                    "minecraft:water",
+                    &water,
+                    &data.draw_look("minecraft:water")
+                ),
+                0xFF3F_76E4
+            );
+        });
     }
 }

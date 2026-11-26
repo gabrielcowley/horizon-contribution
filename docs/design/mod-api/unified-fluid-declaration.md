@@ -227,6 +227,16 @@ should take over unchanged when it lands:
   viscosity 2000 and density 1400 moved a zombie and a dropped item through it exactly as
   through water, tick for tick: neither number touches entity motion.
 
+## Amendment: drawing any fluid outside the world
+
+`FluidLook` gains `flowing`, the sprite a fluid flows with (`getFlowingTexture`), its `sprite`
+when unset; a registered `FluidModel`'s `flowing` still wins in the world. The client resolves one
+appearance per fluid from the looks, the models and vanilla's own (still and flowing sprites and
+an opaque tint) and every off-world draw reads it: `BlockEntityDrawContext::fluid_box` and
+`fluid_stream`, and `DrawContext::fluid_stack`. A stack's tint is the first answer of its fluid's
+`FluidPart::fluid_tint`, NeoForge's `getTintColor(FluidStack)`, else the resolved one. When this
+note's `Fluid` lands it changes what fills that appearance, not the draw calls.
+
 ## Open questions
 
 - What does viscosity promise beyond metadata? Recommend refusing motion support

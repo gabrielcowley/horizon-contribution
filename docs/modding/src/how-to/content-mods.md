@@ -164,8 +164,8 @@ A content mod has capability `registries` and carries `assets/` and `data/` in t
 by declaring them in `data/<id>/horizon/block/*.json` and `data/<id>/horizon/item/*.json`, each copying a vanilla
 template ([modpacks.md](https://github.com/horizon-rust/horizon/blob/main/docs/modpacks.md#registries-02-data-driven-blocks-items-and-mob-effects)), and creative tabs, mob
 effects, entity types and menu types (each below) in `creative_tab/`, `mob_effect/`, `entity_type/` and `menu/` beside
-them. `fluid/` gives a fluid a client look (`sprite`, an atlas sprite id, and `tint`, `0xAARRGGBB`, both optional), as
-NeoForge's `IClientFluidTypeExtensions`; the fluid needs no block, and a recipe page draws its well from it. Its `world`
+them. `fluid/` gives a fluid a client look (`sprite`, an atlas sprite id, `flowing`, the sprite it flows with, `sprite`'s
+when unset, and `tint`, `0xAARRGGBB`, all optional), as NeoForge's `IClientFluidTypeExtensions`; the fluid needs no block, and a recipe page draws its well from it. Its `world`
 object makes it exist in the world: `{"world": {}}` adds the block `<id>:<path>`, a copy of `minecraft:water` that flows
 with vanilla's fluid simulation, and the bucket item `<id>:<path>_bucket`, which needs its model as any item does. `world`
 takes `tick_delay` (1 or more, default 5), `drop_off` (1 to 7, default 1), `slope_find_distance` (1 to 4, default 4),

@@ -33,6 +33,7 @@ fn fluid_wire_round_trips_and_truncation() {
     round(FluidLook {
         id: "a:oil".into(),
         sprite: Some("a:block/oil".into()),
+        flowing: Some("a:block/oil_flow".into()),
         tint: Some(0x3F2A10),
         light_level: 7,
         lighter_than_air: true,
@@ -48,6 +49,7 @@ fn fluid_wire_round_trips_and_truncation() {
     });
     round(FluidFile {
         sprite: Some("a:block/brine".into()),
+        flowing: Some("a:block/brine_flow".into()),
         tint: Some(0x123456),
         light_level: Some(15),
         lighter_than_air: None,

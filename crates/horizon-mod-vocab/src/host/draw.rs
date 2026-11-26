@@ -114,6 +114,15 @@ pub trait DrawContext {
     fn fluid(&mut self, fluid: &str, at: [f32; 2], size: f32) {
         unimplemented!("DrawContext::fluid")
     }
+    /// Fluid stack `stack` drawn as a square with its top left at `at`, `size` GUI pixels wide
+    /// (16 in a slot), in the colour a tank draws it in: the first answer of the fluid's parts to
+    /// `fluid_tint`, else its look's. It shows the first frame of the fluid's still sprite where
+    /// the GUI atlas holds it (vanilla's water and lava, a sprite under a mod's
+    /// `textures/gui/`), else a flat square of the colour. False, with nothing drawn, for an
+    /// unresolved fluid; a stack of 0 draws as any other.
+    fn fluid_stack(&mut self, stack: &FluidStack, at: [f32; 2], size: f32) -> bool {
+        unimplemented!("DrawContext::fluid_stack")
+    }
     /// Draws `blocks`, a scene of block states at positions of its own (not
     /// the world's), into the box `rect` (x0, y0, x1, y1, GUI pixels) of a
     /// screen's `batch`, seen as `view` says: Create's Ponder scenes. Each
@@ -537,12 +546,15 @@ pub trait BlockEntityDrawContext {
         unimplemented!("BlockEntityDrawContext::draw_model_part")
     }
     /// Draws `stack` as a still fluid filling `bounds` (`[x0, y0, z0, x1, y1, z1]` in blocks
-    /// under `draw`'s pose), as a tank's contents: `minecraft:water` or `minecraft:lava` with no
-    /// components. Each face tiles the fluid's animated still sprite (`block/water_still`), one
-    /// tile per block, cut at whole-block lines and keeping each part's place in its tile, with
-    /// no inset of the box. The tint is the stack's, not the biome's water colour, unless
-    /// `options.argb` replaces it. Sky light stays as `draw.light`; block light rises to the
-    /// fluid's own (15 for lava). No face is shaded by direction. Faces are sorted far to
+    /// under `draw`'s pose), as a tank's contents: any registered fluid, vanilla's, a mod's
+    /// world fluid or one only a tank holds, components and all (catnip's `renderFluidBox`).
+    /// Each face tiles the fluid's animated still sprite (`block/water_still`, a mod's look's
+    /// `sprite`), one tile per block, cut at whole-block lines and keeping each part's place in
+    /// its tile, with no inset of the box. The tint is the stack's: the first answer of the
+    /// fluid's parts to `fluid_tint`, else its look's, never the biome's water colour; `options.argb`
+    /// replaces it. Sky light stays as `draw.light`; block light rises to the fluid's own light
+    /// level (15 for lava, a mod's declared `light_level`). A gas is drawn upside down when
+    /// `options.invert_gases` says so. No face is shaded by direction. Faces are sorted far to
     /// near, alpha blended, culled from behind and write depth, drawn with the block entities
     /// before the level's translucent terrain. A stack of 0 draws nothing and is `Ok` without
     /// checking `bounds`; a refusal draws nothing.
@@ -553,6 +565,26 @@ pub trait BlockEntityDrawContext {
         options: FluidBoxOptions,
     ) -> Result<(), FluidBoxError> {
         unimplemented!("BlockEntityDrawContext::draw_fluid_box")
+    }
+    /// Draws `stack` as a stream of fluid leaving the block through its `direction` face, or
+    /// arriving through it when `inbound`, as Create's `FluidRenderer.renderFluidStream` draws a
+    /// spout's pour and a pipe's flow, under `draw`'s pose with the block at `0..1`. The stream
+    /// is a square column `radius` blocks from the face's centre line each way (`0.0..=1.0`): it
+    /// runs from the block's centre (outbound) or its face (inbound) for `progress` (`0.0` to
+    /// `1.0`) of half a block. Its four sides tile the fluid's flowing sprite at half scale
+    /// (`block/water_flow`, a mod's look's `flowing`), and while `progress` is under 1 a cap of
+    /// its still sprite closes the leading end. Tint and light are `fluid_box`'s, with no
+    /// `argb` of its own. A stack of 0 draws nothing and is `Ok` without checking the rest; a
+    /// refusal draws nothing.
+    fn fluid_stream(
+        &mut self,
+        stack: &FluidStack,
+        direction: Direction,
+        radius: f32,
+        progress: f32,
+        inbound: bool,
+    ) -> Result<(), FluidBoxError> {
+        unimplemented!("BlockEntityDrawContext::draw_fluid_stream")
     }
 }
 /// What `block_screen_effect_draw` draws with, one per hook call: quads in camera space, in

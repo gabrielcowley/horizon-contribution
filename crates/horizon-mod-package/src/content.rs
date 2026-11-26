@@ -600,6 +600,7 @@ struct CreativeTabFile {
 #[serde(deny_unknown_fields)]
 struct FluidFile {
     sprite: Option<String>,
+    flowing: Option<String>,
     tint: Option<u32>,
     light_level: Option<u8>,
     lighter_than_air: Option<bool>,
@@ -723,6 +724,10 @@ pub struct FluidLook {
     pub id: String,
     /// An atlas sprite id (`namespace:path`); none draws a flat square of the tint.
     pub sprite: Option<String>,
+    /// The sprite of the fluid as it flows (`getFlowingTexture`): a stream between machines,
+    /// and a world fluid's flowing surfaces and sides unless a registered model names one.
+    /// `sprite` when unset.
+    pub flowing: Option<String>,
     /// `0xAARRGGBB`.
     pub tint: Option<u32>,
     /// `FluidType.getLightLevel`, 0 to 15: what the fluid gives off wherever it is, in a tank
@@ -1517,6 +1522,11 @@ impl Content {
                     "{name}: sprite is an atlas sprite id (namespace:path)"
                 ));
             }
+            if file.flowing.as_deref().is_some_and(|s| !namespaced_id(s)) {
+                return Err(format!(
+                    "{name}: flowing is an atlas sprite id (namespace:path)"
+                ));
+            }
             if let Some(world) = &file.world {
                 world.check().map_err(|e| format!("{name}: world: {e}"))?;
             }
@@ -1526,6 +1536,7 @@ impl Content {
             let look = FluidLook {
                 id: fluid,
                 sprite: file.sprite,
+                flowing: file.flowing,
                 tint: file.tint,
                 light_level: file.light_level.unwrap_or(0),
                 lighter_than_air: file.lighter_than_air.unwrap_or(false),
@@ -3702,7 +3713,7 @@ capabilities = ["registries"]
         let files: &[(&str, &[u8])] = &[
             (
                 "data/ruby/horizon/fluid/steam.json",
-                br#"{"sprite":"ruby:gui/fluids/steam","tint":4291343520}"#,
+                br#"{"sprite":"ruby:gui/fluids/steam","flowing":"ruby:gui/fluids/steam_flow","tint":4291343520}"#,
             ),
             ("data/ruby/horizon/fluid/bare.json", b"{}"),
         ];
@@ -3713,6 +3724,7 @@ capabilities = ["registries"]
                 FluidLook {
                     id: "ruby:bare".into(),
                     sprite: None,
+                    flowing: None,
                     tint: None,
                     light_level: 0,
                     lighter_than_air: false,
@@ -3721,6 +3733,7 @@ capabilities = ["registries"]
                 FluidLook {
                     id: "ruby:steam".into(),
                     sprite: Some("ruby:gui/fluids/steam".into()),
+                    flowing: Some("ruby:gui/fluids/steam_flow".into()),
                     tint: Some(4291343520),
                     light_level: 0,
                     lighter_than_air: false,
@@ -3738,6 +3751,12 @@ capabilities = ["registries"]
             let e = hmod("fluid", MANIFEST_TEXT, bad).unwrap_err();
             assert!(e.contains("sprite"), "{e}");
         }
+        let bad: &[(&str, &[u8])] = &[(
+            "data/ruby/horizon/fluid/x.json",
+            br#"{"sprite":"ruby:steam","flowing":"steam_flow"}"#,
+        )];
+        let e = hmod("fluid", MANIFEST_TEXT, bad).unwrap_err();
+        assert!(e.contains("flowing is an atlas sprite id"), "{e}");
     }
 
     #[test]

@@ -125,6 +125,11 @@ impl DrawContext for GameDrawContext<'_, '_> {
         let at = self.translated_at(at);
         self.game.native_fluid(&mut *self.surface, fluid, at, size)
     }
+    fn fluid_stack(&mut self, stack: &FluidStack, at: [f32; 2], size: f32) -> bool {
+        let at = self.translated_at(at);
+        self.game
+            .native_fluid_stack(&mut *self.surface, stack, at, size)
+    }
     fn draw_scene(
         &mut self,
         rect: [f32; 4],
@@ -449,6 +454,23 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
     ) -> Result<(), FluidBoxError> {
         self.game
             .native_draw_fluid_box(&mut *self.surface, stack, bounds, options)
+    }
+    fn fluid_stream(
+        &mut self,
+        stack: &FluidStack,
+        direction: mod_api::Direction,
+        radius: f32,
+        progress: f32,
+        inbound: bool,
+    ) -> Result<(), FluidBoxError> {
+        self.game.native_draw_fluid_stream(
+            &mut *self.surface,
+            stack,
+            direction,
+            radius,
+            progress,
+            inbound,
+        )
     }
 }
 /// [`CameraDrawContext`] on the game's `crate::screen_effects::CameraQuads`.

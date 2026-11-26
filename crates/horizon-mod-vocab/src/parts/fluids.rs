@@ -14,7 +14,9 @@ impl HookParts {
 }
 
 impl dyn Registrar + '_ {
-    /// Attach `part` to the world fluid `fluid`, a mod's, by the id it was declared with.
+    /// Attach `part` to the fluid `fluid`, a mod's, by the id it was declared with: a world fluid,
+    /// or one only a tank holds (`declare_fluid`), whose parts answer only its client hooks
+    /// (`fluid_tint`).
     pub fn fluid_part<P: FluidPart>(&mut self, fluid: &str, part: P) {
         self.attach_fluid_part(fluid, type_name::<P>(), Arc::new(part));
     }

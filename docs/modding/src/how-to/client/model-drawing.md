@@ -161,25 +161,30 @@ whose mod was disabled. Re-enabling starts without groups: recreate them from th
 newly published model handles. Slot reuse never revives an old handle. Native and
 wasm use the same ownership, budgets, lifetime and rendering implementation.
 
-## Still fluids in a block entity
+## Fluids in a block entity
 
 A block entity, mob or player submit hook draws a tank's contents with
 `draw.fluid_box(&stack, bounds, options)`, where `bounds` is
 `[x0, y0, z0, x1, y1, z1]` in blocks under the draw's current pose:
 
 ```rust,ignore
-let options = FluidBoxOptions::new(false, 4.0 / 1024.0);
+let options = FluidBoxOptions::new(false, 4.0 / 1024.0).with_invert_gases();
 draw.fluid_box(&tank.stack, [0.125, 0.0625, 0.125, 0.875, level, 0.875], options)?;
 ```
 
-- The stack is `minecraft:water` or `minecraft:lava` with no components. Any other fluid,
-  an unresolved one or a component patch is `FluidBoxError::UnsupportedFluid`.
+- The stack is any registered fluid: vanilla's, a mod's world fluid or one only a tank holds,
+  with or without components. Only an unresolved fluid is `FluidBoxError::UnsupportedFluid`.
 - Each face tiles the fluid's animated still sprite once per block, cut at whole-block lines.
   Each tile keeps its place in the sprite. The box is not inset. `uv_shrink_ratio` is the
   sprite's `TextureAtlasSprite.uvShrinkRatio` (`0.0..=1.0`), and `render_bottom` adds the bottom face.
-- The colour is the stack's tint (plain water `0xFF3F76E4`, lava white), never the biome's
-  water colour. `with_argb` replaces it, alpha included. Faces have no directional shading.
-  Sky light is the draw's own, and block light rises to the fluid's (lava 15).
+  The sprite is the fluid's look's `sprite` (`data/<mod>/horizon/fluid/<name>.json`), or its
+  registered model's; a fluid with none draws water's.
+- The colour is the stack's: the first answer of the fluid's parts to `fluid_tint` (below), else
+  its look's `tint` made opaque (plain water `0xFF3F76E4`, lava white), never the biome's water
+  colour. `with_argb` replaces it, alpha included. Faces have no directional shading.
+  Sky light is the draw's own, and block light rises to the fluid's `light_level` (lava 15).
+- `with_invert_gases` draws a gas (a fluid declared `lighter_than_air`) upside down, turned half
+  round the box's x axis through its centre, as Create's tanks and spouts do; other fluids ignore it.
 - The faces use a material of their own: sorted far to near, alpha blended, culled from behind,
   and depth-writing. They draw with the block entities, before the level's translucent terrain,
   under shader packs too.
@@ -187,6 +192,43 @@ draw.fluid_box(&tank.stack, [0.125, 0.0625, 0.125, 0.875, level, 0.875], options
   bounds, bounds beyond 1,048,576 blocks, a box of more than 65,536 tiled quads and a ratio out of range are
   `FluidBoxError::InvalidBox`. Missing fluid sprites return
   `FluidBoxError::MissingSprite`. A refusal draws nothing.
+
+A stream between machines, a spout's pour or a pipe's flow, is
+`draw.fluid_stream(&stack, direction, radius, progress, inbound)`, Create's
+`FluidRenderer.renderFluidStream`, with the block at `0..1` under the pose:
+
+```rust,ignore
+draw.fluid_stream(&pipe.stack, Direction::Down, 0.125, pipe.progress, false)?;
+```
+
+- The stream is a square column `radius` blocks (`0.0..=1.0`) each way of the `direction` face's
+  centre line. Outbound it runs from the block's centre towards the face; `inbound` runs it from
+  the face towards the centre. It is `progress` (`0.0` to `1.0`) of half a block long.
+- Its four sides tile the fluid's flowing sprite at half scale (the look's `flowing`, else its
+  still sprite). While `progress` is under 1 a cap of the still sprite closes its leading end.
+- Tint and light follow `fluid_box`. A radius out of range or a progress that isn't finite is
+  `FluidBoxError::InvalidBox`; a stack of 0 draws nothing.
+
+### A stack's own colour
+
+A fluid's `FluidPart` answers `fluid_tint` to colour each stack from the stack itself, as
+NeoForge's `getTintColor(FluidStack)` does: a potion from its `minecraft:potion_contents`, say.
+It runs on the client with no host, on every draw and with no cache, so keep it pure and fast.
+The first part to answer `Some` wins, in dispatch order; `None` leaves the stack its look's tint.
+Attach it with `r.fluid_part(id, part)` to any fluid a mod declared, one only a tank holds too.
+
+```rust,ignore
+#[mod_api::horizon_part]
+impl FluidPart for Potion {
+    fn fluid_tint(&self, event: &mut FluidTintEvent<'_>) -> Option<u32> {
+        potion_colour(event.stack).map(|rgb| 0xFF00_0000 | rgb)
+    }
+}
+```
+
+A GUI draws the same colour with `draw.fluid_stack(&stack, at, size)`: a square of the fluid's
+still sprite where the GUI atlas holds it (vanilla's water and lava, a sprite under a mod's
+`textures/gui/`), else a flat square of the colour. It returns false for an unresolved fluid.
 
 ## Before and after a living entity draws
 

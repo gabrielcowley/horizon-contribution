@@ -69,6 +69,44 @@ impl Game<'_> {
             );
         }
     }
+    /// Fluid stack `stack` drawn as a square with its top left at `at`, `size` GUI pixels wide,
+    /// in the colour a tank draws it in (`fluid_tint`, else its look's): the first frame of its
+    /// still sprite where the GUI atlas holds it, else a flat square. False for an unresolved
+    /// fluid. See `DrawContext::fluid_stack`.
+    pub(in crate::game) fn native_fluid_stack(
+        &self,
+        batch: &mut HudBatch,
+        stack: &FluidStack,
+        at: [f32; 2],
+        size: f32,
+    ) -> bool {
+        let Some(id) = stack.key().and_then(mod_api::__private::fluid_id) else {
+            return false;
+        };
+        let look = horizon_client::fluid_models::draw_look(id);
+        let tint = horizon_client::fluid_models::stack_tint(id, stack, &look);
+        let dst = [at[0], at[1], size, size];
+        // The GUI atlas names vanilla's sprites without their namespace.
+        let still = look.still.strip_prefix("minecraft:").unwrap_or(&look.still);
+        match self.gui_sprite_pixels(still) {
+            // An animated sprite is a strip of square frames, the first on top.
+            Some([w, h]) => {
+                self.native_sprite(batch, still, [0.0, 0.0, w, w.min(h)], dst, Some(tint));
+            }
+            None => {
+                let [a, r, g, b] = tint.to_be_bytes();
+                batch.fill(
+                    &self.gui.atlas,
+                    dst[0],
+                    dst[1],
+                    dst[2],
+                    dst[3],
+                    rgba(r, g, b, a),
+                );
+            }
+        }
+        true
+    }
     /// Fluid `fluid`'s name as the lang names it (`fluid_type.<mod>.<name>`, vanilla's by its block),
     /// else its path in words.
     pub(in crate::game) fn fluid_name(&self, fluid: &str) -> String {

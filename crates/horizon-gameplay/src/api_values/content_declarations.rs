@@ -265,6 +265,7 @@ impl TryIntoEngine<()> for (String, mod_api::WorldFluid) {
         Ok(engine::FluidLook {
             id: id.clone(),
             sprite: None,
+            flowing: None,
             tint: None,
             light_level: 0,
             lighter_than_air: false,
