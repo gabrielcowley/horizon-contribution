@@ -1239,3 +1239,46 @@ fn game_block_entities_are_drawn_by_their_renderers_with_their_saved_data() {
         assert!(written > blank, "the sign's text ({written} > {blank})");
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn game_block_entities_in_a_clocked_scene_move_on_its_tick_not_the_clients() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        // A banner sways with the game time and partial tick.
+        let banner = mod_api::SceneBlock::new([0, 0, 0], block(game, "minecraft:white_banner"), None);
+        let parts = SceneParts::new().with_game_block_entities(Vec::new());
+        // Held by a live scene and by one that only poses its blocks.
+        for clock in [
+            SceneClock::new(61, 0, 0.25),
+            SceneClock::new(62, 0, 0.25).animate_blocks(false),
+        ] {
+            let at = |game: &mut super::Game<'_>, tick| {
+                let mut clock = clock;
+                clock.tick = tick;
+                game.frames += 1;
+                let scene = Scene::new(vec![banner.clone()]).with_clock(clock);
+                bytemuck::cast_slice::<_, u8>(&drawn(game, &scene, &parts)).to_vec()
+            };
+            game.world.game_time = 500;
+            game.clock.advance_set(std::time::Duration::ZERO, 0, 0.1);
+            let first = at(game, 10);
+            assert!(!first.is_empty(), "the banner is drawn");
+            // The client's clock moves; the scene's doesn't.
+            game.world.game_time = 1234;
+            game.clock.advance_set(std::time::Duration::ZERO, 0, 0.6);
+            assert!(at(game, 10) == first, "the same scene tick, another client clock");
+            let later = at(game, 35);
+            assert_eq!(later.len(), first.len());
+            assert!(later != first, "another scene tick sways it elsewhere");
+            // Scrubbed back, it is where it was.
+            assert!(at(game, 10) == first, "scrubbed back to tick 10");
+        }
+        // Without a clock it follows the client's.
+        let unclocked = Scene::new(vec![banner.clone()]);
+        game.world.game_time = 500;
+        let before = bytemuck::cast_slice::<_, u8>(&drawn(game, &unclocked, &parts)).to_vec();
+        game.world.game_time = 525;
+        let after = bytemuck::cast_slice::<_, u8>(&drawn(game, &unclocked, &parts)).to_vec();
+        assert!(after != before, "no clock: the client's");
+    });
+}

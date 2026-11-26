@@ -195,7 +195,11 @@ impl DrawContext for GameDrawContext<'_, '_> {
         }
         let rect = self.translated_corners(rect);
         let biomes = self.game.res.biomes();
-        let look = SceneLook::of(parts, |name| biomes.contains(name).then(|| biomes.id(name)))?;
+        let mut look = SceneLook::of(parts, |name| biomes.contains(name).then(|| biomes.id(name)))?;
+        look.clock = match scene.clock {
+            Some(clock) if !clock.partial.is_finite() => return Err(SceneError::BadClock.into()),
+            clock => clock.map(|clock| (clock.tick, clock.partial)),
+        };
         let frame = SceneFrame::new(rect, view).with_parts(&self.game.gui.atlas, look, parts)?;
         let mut cells = crate::game::api_values::aggregates::scene_blocks(&scene.blocks)?;
         apply_block_parts(&mut cells, parts)?;

@@ -61,6 +61,9 @@ pub(super) struct SceneLook {
     pub(super) fluids: bool,
     pub(super) game_block_entities: bool,
     pub(super) keep_particles: bool,
+    /// The scene's clock as its tick and partial tick: the game's block entities are
+    /// posed on it, not on the client's clock.
+    pub(super) clock: Option<(u64, f32)>,
 }
 
 impl SceneLook {
@@ -79,6 +82,7 @@ impl SceneLook {
             fluids: parts.fluids,
             game_block_entities: parts.game_block_entities,
             keep_particles: parts.keep_particles,
+            clock: None,
         })
     }
 }
@@ -608,12 +612,15 @@ impl Game<'_> {
     /// The game's own block entities of culling group `group` (chests, signs, banners…),
     /// drawn by their renderers as in the world, full bright, against a small level of the
     /// group's blocks with the saved data each gives, before its pose and light. Nothing
-    /// ticks. A mod's block entity keeps its own path.
+    /// ticks. What moves with time (a banner's sway, a gateway's beam) follows `clock`, the
+    /// scene's tick and partial tick, when it has one, and the client's otherwise. A mod's
+    /// block entity keeps its own path.
     fn scene_group_entities(
         &self,
         batch: &mut HudBatch,
         blocks: &SceneBlocks<'_, '_>,
         group: usize,
+        clock: Option<(u64, f32)>,
         quads: &mut Vec<SceneQuad>,
     ) {
         let renderer = self.res.block_entity_render();
@@ -628,6 +635,10 @@ impl Game<'_> {
             return;
         }
         let world = self.scene_entity_level(members());
+        let (partial, game_time) = match clock {
+            Some((tick, partial)) => (partial, i64::try_from(tick).unwrap_or(i64::MAX)),
+            None => (self.clock.fraction() as f32, self.world.game_time),
+        };
         let sign = |p: [i32; 3]| match world.block_entities.get(&(p[0], p[1], p[2])) {
             Some(BlockEntity::Sign(sign)) => Some(sign),
             _ => None,
@@ -649,8 +660,8 @@ impl Game<'_> {
             orientation: Quat::IDENTITY,
             anim: &|_, _| horizon_client::block_entity_render::BlockAnim::default(),
             texts: None,
-            partial: self.clock.fraction() as f32,
-            game_time: self.world.game_time,
+            partial,
+            game_time,
             max_y: world.shape.max_y() - 1,
             world: &world,
             sprites: &self.gui.atlas.sprites,
@@ -945,7 +956,7 @@ impl Game<'_> {
                 self.scene_group_fluids(blocks, group, look, &state_at, &mut quads);
             }
             if look.game_block_entities {
-                self.scene_group_entities(batch, blocks, group, &mut quads);
+                self.scene_group_entities(batch, blocks, group, look.clock, &mut quads);
             }
             let Some(pose) = pose else {
                 continue;

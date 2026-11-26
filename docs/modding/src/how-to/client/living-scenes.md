@@ -245,7 +245,9 @@ draw.draw_scene_parts(rect, &scene, view, &parts)?;
 - **Game block entities.** A block with one of the game's block entity renderers (a chest, a sign,
   a banner, a bell) is drawn by it, with the saved data given for its index or else the type's
   defaults. The data's `id` may be left out. Nothing ticks, so chests stay shut; a player head
-  draws its default skin.
+  draws its default skin. What moves with time, such as a banner's sway, follows the scene's
+  clock when it has one, its tick as the game time and its partial tick, so it holds when the
+  clock is paused and goes back when it is scrubbed back. Without a clock it follows the client's.
 - **Breaking.** Destroy stage 0 to 9 over a block's model, by block index.
 - **Keeping particles.** With `keep_particles(true)`, changed blocks, block entities or entities do
   not start the scene over: its particles, and the ticking copies whose inputs stay the same, go

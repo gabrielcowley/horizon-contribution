@@ -612,7 +612,8 @@ pub struct SceneParts {
     pub fluids: bool,
     /// Whether a block with one of the game's block entity renderers (a chest, a sign, a
     /// banner, a skull, a bell) is drawn by that renderer, with its `block_data` or else the
-    /// type's defaults. Nothing in a scene ticks, so a chest stays shut.
+    /// type's defaults. Nothing in a scene ticks, so a chest stays shut. What moves with time
+    /// (a banner's sway) follows the scene's clock when it has one, and the client's otherwise.
     pub game_block_entities: bool,
     /// The saved data of the game's own block entities, as a world loads it, each with its
     /// block's index in `Scene::blocks`. Read when `game_block_entities` is set; the data's

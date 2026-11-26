@@ -10,6 +10,7 @@ horizon-client game::native_scene_live_tests::a_scene_that_keeps_its_particles_g
 horizon-client game::native_scene_live_tests::breaking_lays_a_crack_over_every_face_drawn lib daily game-boot
 horizon-client game::native_scene_live_tests::default_parts_and_a_group_in_place_draw_exactly_as_draw_scene lib daily game-boot
 horizon-client game::native_scene_live_tests::game_block_entities_are_drawn_by_their_renderers_with_their_saved_data lib daily game-boot
+horizon-client game::native_scene_live_tests::game_block_entities_in_a_clocked_scene_move_on_its_tick_not_the_clients lib daily game-boot
 horizon-client game::native_scene_live_tests::groups_move_hide_and_are_lit_in_one_depth lib daily game-boot
 horizon-client game::native_scene_live_tests::invalid_textured_faces_do_not_touch_the_batch_or_keep_or_advance_a_scene lib daily game-boot
 horizon-client game::native_scene_live_tests::particles_kept_outlive_the_frames_that_add_none lib daily game-boot
