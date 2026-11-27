@@ -253,9 +253,9 @@ fn entity_refusal(error: GuiEntityError, index: u32) -> SceneError {
 
 impl Game<'_> {
     /// Draws the prepared `blocks` into the given `frame`, with its textured quads.
-    /// A static scene keeps no state and reads no clock. A living one is drawn with
-    /// its entities and the particles its clock ticks; a clock also drives any
-    /// scene-only block entity tickers. Invalid input draws nothing.
+    /// A static scene keeps no state. A living one is drawn with its entities and
+    /// the particles its clock ticks; a clock also drives any scene-only block
+    /// entity tickers, and poses every block entity. Invalid input draws nothing.
     /// Past the frame's animating budget, the blocks, textured quads and the scene's
     /// last state are drawn, its clock does not advance, and this returns `TooManyScenes`.
     pub(super) fn native_draw_scene(
@@ -265,6 +265,11 @@ impl Game<'_> {
         scene: &Scene,
         frame: SceneFrame,
     ) -> Result<(), SceneError> {
+        // Every block entity in a clocked scene is posed on its clock.
+        let time = match scene.clock {
+            Some(clock) if !clock.partial.is_finite() => return Err(SceneError::BadClock),
+            clock => clock.map(|clock| (clock.tick, clock.partial)),
+        };
         if !self.native_window() {
             return Err(SceneError::Unavailable);
         }
@@ -272,7 +277,7 @@ impl Game<'_> {
         let can_tick = scene.clock.is_some()
             && mod_api::__private::has_part_hook(mod_api::HookId::BlockEntitySceneTick);
         if !ordinary && !can_tick {
-            return self.draw_scene_quads(batch, blocks, frame, None, |_| {});
+            return self.draw_scene_quads(batch, blocks, frame, time, &[], |_| {});
         }
         let owner = mod_api::content::crash::current_native_mod().unwrap_or("");
         let mut scenes = self
@@ -310,7 +315,7 @@ impl Game<'_> {
                 },
             );
             if !ticking {
-                self.draw_scene_quads(batch, blocks, frame, None, |_| {})?;
+                self.draw_scene_quads(batch, blocks, frame, time, &[], |_| {})?;
                 // Removing a ticking input retires its previous animation, even when the
                 // replacement no longer has anything that animates.
                 if let Some(i) = at {
@@ -356,7 +361,7 @@ impl Game<'_> {
                     l.frame = frame_id;
                     self.draw_live(batch, blocks, frame, l, clock.partial)?;
                 }
-                None => self.draw_scene_quads(batch, blocks, frame, None, |_| {})?,
+                None => self.draw_scene_quads(batch, blocks, frame, time, &[], |_| {})?,
             }
             return Err(SceneError::TooManyScenes);
         }
@@ -419,7 +424,8 @@ impl Game<'_> {
             batch,
             blocks,
             frame,
-            Some((*tick, partial, block_entities)),
+            Some((*tick, partial)),
+            block_entities,
             |quads| {
                 for (i, mob) in mobs.iter().enumerate() {
                     let place = places.get(i).copied().unwrap_or_default();

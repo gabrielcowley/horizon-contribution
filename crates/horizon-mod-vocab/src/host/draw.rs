@@ -380,7 +380,7 @@ pub trait BlockEntityDrawContext {
     fn partial(&self) -> f32 {
         unimplemented!("BlockEntityDrawContext::draw_partial")
     }
-    /// The level's game time, or the scene's tick for a ticking scene block entity.
+    /// The level's game time, or the scene's tick for a block entity in a clocked scene.
     fn game_time(&self) -> i64 {
         unimplemented!("BlockEntityDrawContext::draw_game_time")
     }
@@ -389,9 +389,15 @@ pub trait BlockEntityDrawContext {
     /// `TextureManager.tick` count): pausing and `/tick freeze` hold it, and the server's
     /// time updates never set it back, unlike `game_time`. Each client counts from its
     /// own start, so it means nothing on the server or to another client.
-    /// A ticking scene block entity uses its scene's tick and partial tick instead.
+    /// A block entity in a clocked scene uses its scene's tick and partial tick instead.
     fn animation_time(&self) -> f64 {
         unimplemented!("BlockEntityDrawContext::draw_animation_time")
+    }
+    /// True when this draw is a block entity in a screen scene (`draw_scene`), not one
+    /// in a level: Ponder's `isVirtual`. A renderer can skip what only makes sense in a
+    /// level, such as reading neighbours. A scene with a clock poses it on that clock.
+    fn in_scene(&self) -> bool {
+        unimplemented!("BlockEntityDrawContext::draw_in_scene")
     }
     /// The light the helpers draw with: the block's own
     /// (`LevelRenderer.getLightCoords`), 16 times sky light in bits 0..8 and

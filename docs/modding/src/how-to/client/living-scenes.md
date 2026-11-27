@@ -31,6 +31,24 @@ if let Err(why) = event.batch.draw_scene([12.0, 20.0, 140.0, 110.0], &scene, vie
 }
 ```
 
+## Pointing at a block
+
+`SceneView::to_gui(rect, point)` gives the GUI position a scene point is drawn at in that box,
+and `ray_from_gui(rect, gui)` the scene ray under a GUI point, for a label that points at a
+block or for picking one under the mouse. They are the projection `draw_scene` uses, computed
+in the mod with no host call. A section's pose is not applied: move the point by the section
+first, or cast the ray through the section's inverse pose.
+
+```rust
+// The label's arrow points at the top of block [2, 1, 0].
+let [x, y, _] = view.to_gui(rect, [2.5, 2.0, 0.5]);
+// The ray under the mouse: march it through the scene's cells to find the block hit.
+let (origin, direction) = view.ray_from_gui(rect, [mouse_x, mouse_y]);
+```
+
+`to_gui`'s third value is how far towards the viewer the point is, in GUI pixels; the ray's
+origin is level with the view's center, and its direction points away from the viewer.
+
 ## Moving a section
 
 Keep the blocks in their original cells. To lift or rotate a part of the structure, group those
@@ -121,9 +139,20 @@ event.batch.draw_scene(rect, &scene, view)?;
 
 `animate_blocks(false)` disables only block animate ticks (smoke, drips, etc.). The scene
 copy starts at its supplied fields on the first draw and ticks as the scene clock advances.
-You can rebuild the same inputs each frame without resetting the animation. Without a clock
-or a registered scene ticker, the renderer uses the supplied fields and the client clock,
-as before. The live-world client and server tick hooks never run for a scene.
+You can rebuild the same inputs each frame without resetting the animation. Without a
+registered scene ticker, the renderer uses the supplied fields. The live-world client and
+server tick hooks never run for a scene.
+
+### Time and `in_scene`
+
+In a scene with a clock, every block entity is drawn on that clock, whether its type has a
+scene ticker or not, and whether its mod is native or wasm: `draw.partial()` is the clock's
+`partial`, `draw.game_time()` its `tick`, and `draw.animation_time()` is `tick + partial`,
+which turns `spin` parts. Holding the tick holds them; moving it, forwards or back, moves
+them. Without a clock, block entities are drawn on the client's clock.
+
+`draw.in_scene()` is true for a block entity drawn in a scene and false in a level, as
+Ponder's `isVirtual`. A renderer can skip what only makes sense in a level there.
 
 ## The scene's clock and its particles
 
@@ -295,7 +324,7 @@ returns a `SceneError`:
 | `NoEntity { index }` | A handle naming no living entity of the client's level |
 | `BadEntity { index }` | A position or turn that isn't finite, or a position more than 30 million blocks out |
 | `BadParticle { index }` | Particle options, a position or a velocity that isn't finite, or options that name a stack |
-| `BadClock` | A partial tick that isn't finite |
+| `BadClock` | A partial tick that isn't finite, with or without entities and particles |
 | `NoClock` | Entities or particles without a clock |
 
 ## Not yet

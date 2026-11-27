@@ -383,6 +383,9 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
     fn animation_time(&self) -> f64 {
         self.game.native_draw_animation_time(&*self.surface)
     }
+    fn in_scene(&self) -> bool {
+        self.game.native_draw_in_scene(&*self.surface)
+    }
     fn light(&self) -> u32 {
         self.game.native_draw_light(&*self.surface)
     }

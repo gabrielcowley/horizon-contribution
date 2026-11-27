@@ -4,7 +4,8 @@ use mod_api::{
     BlockEntityDrawContext, Direction, EntityRenderState, EntityRenderer, EntityRendererRegistry,
     EntityRenderers, Pose,
 };
-/// Lights what it draws `base` plus the entity's id, after moving up by its age.
+/// Lights what it draws `base` plus the entity's id (and 1000 in a screen scene), after moving
+/// up by its age.
 struct Marked(u32);
 impl EntityRenderer for Marked {
     fn submit(
@@ -25,7 +26,8 @@ impl EntityRenderer for Marked {
         {
             draw.translate([l.scale * l.age_scale, l.walk_animation_pos, l.death_time]);
         }
-        draw.set_light(self.0 + entity.id);
+        let scene = if draw.in_scene() { 1000 } else { 0 };
+        draw.set_light(self.0 + entity.id + scene);
         Ok(())
     }
 }
@@ -52,8 +54,12 @@ struct Draw {
     moved: Vec<[f32; 3]>,
     turned: Vec<([f32; 3], f32)>,
     light: u32,
+    in_scene: bool,
 }
 impl BlockEntityDrawContext for Draw {
+    fn in_scene(&self) -> bool {
+        self.in_scene
+    }
     fn translate(&mut self, by: [f32; 3]) {
         self.moved.push(by);
     }
@@ -101,8 +107,16 @@ fn wire_loopback_entity_renderers_register_and_draw_alike_for_native_and_guest_m
                     general: None,
                 }
                 .into();
-                for (kind, light) in [("wire_test:bolt", 307), ("wire_test:dart", 207)] {
-                    let mut draw = Draw::default();
+                let cases = [
+                    ("wire_test:bolt", false, 307),
+                    ("wire_test:dart", false, 207),
+                    ("wire_test:bolt", true, 1307),
+                ];
+                for (kind, in_scene, light) in cases {
+                    let mut draw = Draw {
+                        in_scene,
+                        ..Draw::default()
+                    };
                     assert_eq!(renderers[kind].submit(&entity, &mut draw), Ok(()));
                     assert_eq!(
                         draw,
@@ -110,8 +124,9 @@ fn wire_loopback_entity_renderers_register_and_draw_alike_for_native_and_guest_m
                             moved: vec![[0.0, 12.25, 0.0]],
                             turned: vec![([0.0, 1.0, 0.0], -90.0)],
                             light,
+                            in_scene,
                         },
-                        "{kind}, guest {guest}"
+                        "{kind}, in a scene {in_scene}, guest {guest}"
                     );
                 }
                 // A living entity's frame crosses whole.
@@ -149,6 +164,7 @@ fn wire_loopback_entity_renderers_register_and_draw_alike_for_native_and_guest_m
                         moved: vec![[0.0, 12.25, 0.0], [1.5, 2.0, 3.5]],
                         turned: vec![([0.0, 1.0, 0.0], -45.0)],
                         light: 207,
+                        in_scene: false,
                     },
                     "a living entity, guest {guest}"
                 );
