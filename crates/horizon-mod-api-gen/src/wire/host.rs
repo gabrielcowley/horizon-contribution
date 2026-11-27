@@ -298,6 +298,11 @@ fn fallback(
             None => "Err(mod_api::PayloadHandleError::Failed(String::from(\"wasm call refused or trapped\")))".into(),
         };
     }
+    // A placement modifier's emitted positions are used only when its call answers `Ok`, so a
+    // trap must fail the call rather than fall to the `Ok(())` arm below.
+    if m.owner == "PlacementModifier" && m.name == "modify" {
+        return "Err(call_refused())".into();
+    }
     match &m.ret {
         // String-error operations can report a refused VM call directly. In particular,
         // callbacks must not turn a trap after staged effects into a successful commit.
