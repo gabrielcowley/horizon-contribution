@@ -276,6 +276,7 @@ fn has_part_hook(_: HookId) -> bool {
         || !parts.block_entities.is_empty()
         || !parts.items.is_empty()
         || !parts.menus.is_empty()
+        || !parts.fluids.is_empty()
         || !parts.entities.is_empty()
 }
 fn parts(_: HookId, _: &'static str) -> &'static Parts {

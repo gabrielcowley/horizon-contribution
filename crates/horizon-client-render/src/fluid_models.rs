@@ -13,6 +13,7 @@
 //! parts have answered `fluid_tint`.
 use horizon_assets::item_model::FluidAppearance;
 use horizon_mod_package::content::{FluidLook, FluidModel, namespaced_id};
+use mod_api::FluidStack;
 use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
 
@@ -349,7 +350,7 @@ pub fn draw_look(fluid: &str) -> FluidDrawLook {
 
 /// The `0xAARRGGBB` tint `stack` of `fluid` draws with: the first answer of the fluid's parts to
 /// `fluid_tint`, else its look's ([`draw_look`]). NeoForge's `getTintColor(FluidStack)`.
-pub fn stack_tint(fluid: &str, stack: &mod_api::FluidStack, look: &FluidDrawLook) -> u32 {
+pub fn stack_tint(fluid: &str, stack: &FluidStack, look: &FluidDrawLook) -> u32 {
     let mut tint = None;
     native_fluid_tint(fluid, stack, &mut tint);
     tint.unwrap_or(look.tint)
@@ -358,7 +359,7 @@ pub fn stack_tint(fluid: &str, stack: &mod_api::FluidStack, look: &FluidDrawLook
 /// Hook point for mods (declared in `hooks/fluid_tint.rs`): the tint of `stack`, a stack of
 /// `fluid`, is being read to draw it in a tank, a stream or a GUI slot. Its parts may set `tint`.
 #[inline(never)]
-pub fn native_fluid_tint(fluid: &str, stack: &mod_api::FluidStack, tint: &mut Option<u32>) {
+pub fn native_fluid_tint(fluid: &str, stack: &FluidStack, tint: &mut Option<u32>) {
     // The dispatch returns at once when no part listens.
     mod_api::dispatch_fluid_tint(fluid, stack, tint);
 }
