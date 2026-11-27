@@ -8,7 +8,9 @@
 //! The routes that read the table so far: the content mods' thrown types
 //! (`ProjectileKind::Thrown`, by [`ThrownType::slot`]) and the living types drawn as mobs (by
 //! their shared `MobType`, which the game's types never replace while it runs), whose renderer
-//! draws in place of the model and its vanilla layers. Each other entity family becomes a route of
+//! draws in place of the model and its vanilla layers, and the mods' general entity types (by their
+//! frozen registry slot), which have no drawing of their own: with no renderer one draws nothing
+//! but its debug hitbox, as vanilla's `NoopRenderer` does. Each other entity family becomes a route of
 //! its own; until then a registration for one of its types is kept and the type keeps its drawing.
 //! Each load also asks for the layers of the living renderers (`native_entity_layers`), which draw
 //! through the same guard ([`Game::guarded_entity_draw`]).
@@ -48,6 +50,15 @@ static ANY_LIVING: AtomicBool = AtomicBool::new(false);
 /// The player's entity type: its model goes by its skin, not by entity type.
 const PLAYER: &str = "minecraft:player";
 
+/// The shadow radius each type's mod gave it (`EntityRenderers::shadow_radius`), kept once at
+/// start.
+static SHADOWS: OnceLock<BTreeMap<String, f32>> = OnceLock::new();
+
+/// Keeps the mods' shadow radii, once per process (false when they already were).
+pub(super) fn register_shadows(shadows: BTreeMap<String, f32>) -> bool {
+    SHADOWS.set(shadows).is_ok()
+}
+
 /// Keeps the mods' registrations, once per process (false when they already were).
 pub(super) fn register(renderers: BTreeMap<String, Arc<dyn EntityRenderer>>) -> bool {
     REGISTERED.set(renderers).is_ok()
@@ -75,22 +86,29 @@ pub(super) struct EntityRendererTable {
     thrown: Vec<Option<Arc<Resolved<dyn EntityRenderer>>>>,
     /// By the address of the mob type the game shares with every mob of the type.
     living: FxHashMap<usize, Arc<Resolved<dyn EntityRenderer>>>,
+    /// By the general type's slot in the frozen registry, with the shadow radius its renderer
+    /// was given (`EntityRenderers::shadow_radius`).
+    general: Vec<Option<(Arc<Resolved<dyn EntityRenderer>>, f32)>>,
 }
 
 impl EntityRendererTable {
     /// The table for `registered`, with `thrown` the content mods' thrown types, `mobs` the
-    /// living types the game draws as mobs and `known` whether an id is any entity type; and the
-    /// ids of the registrations for no entity type, which it leaves out. A registration for a
-    /// known type no route reads yet is kept silently: the type keeps its own drawing.
+    /// living types the game draws as mobs, `general` the general types' registry (slots below
+    /// its length) and `known` whether an id is any entity type; and the ids of the registrations
+    /// for no entity type, which it leaves out. A registration for a known type no route reads
+    /// yet is kept silently: the type keeps its own drawing.
     pub(super) fn resolve(
         registered: &BTreeMap<String, Arc<dyn EntityRenderer>>,
         thrown: &[ThrownType],
         mobs: &HashMap<String, Arc<MobType>>,
+        general: &crate::game::general::GeneralTypeCatalog,
+        shadows: &BTreeMap<String, f32>,
         known: impl Fn(&str) -> bool,
     ) -> (Self, Vec<String>) {
         let mut table = Self {
             thrown: thrown.iter().map(|_| None).collect(),
             living: FxHashMap::default(),
+            general: (0..general.len()).map(|_| None).collect(),
         };
         let mut unknown = Vec::new();
         for (id, renderer) in registered {
@@ -99,11 +117,20 @@ impl EntityRendererTable {
                 table.thrown[t.slot] = Some(resolved());
             } else if let Some(kind) = mobs.get(id).filter(|_| id != PLAYER) {
                 table.living.insert(Arc::as_ptr(kind) as usize, resolved());
+            } else if let Some(slot) = general.slot(id) {
+                let radius = shadows.get(id).copied().unwrap_or(0.0);
+                table.general[slot] = Some((resolved(), radius));
             } else if !known(id) {
                 unknown.push(id.clone());
             }
         }
         (table, unknown)
+    }
+
+    /// The renderer of the general type in `slot`, with its shadow radius, when a mod
+    /// registered one.
+    pub(super) fn general(&self, slot: usize) -> Option<&(Arc<Resolved<dyn EntityRenderer>>, f32)> {
+        self.general.get(slot)?.as_ref()
     }
 
     /// The renderer of the thrown type `t`, when a mod registered one.
@@ -115,6 +142,15 @@ impl EntityRendererTable {
     pub(super) fn living(&self, mob: &Mob) -> Option<&Arc<Resolved<dyn EntityRenderer>>> {
         self.living.get(&(Arc::as_ptr(&mob.kind) as usize))
     }
+}
+
+/// The renderer the last resource load resolved for the general type in `slot`, with its shadow
+/// radius, when a mod registered one.
+pub(in crate::game) fn general_renderer(
+    slot: usize,
+) -> Option<(Arc<Resolved<dyn EntityRenderer>>, f32)> {
+    let table = TABLE.read().unwrap_or_else(PoisonError::into_inner);
+    table.as_ref()?.general(slot).cloned()
 }
 
 /// The renderer the last resource load resolved for the thrown type `t`, when a mod registered one.
@@ -146,6 +182,8 @@ impl Game<'_> {
             registered,
             horizon_client::projectiles::thrown_types(),
             self.res.mob_types(),
+            crate::game::general::general_type_catalog(),
+            SHADOWS.get().unwrap_or(&BTreeMap::new()),
             |id| rows.contains(id),
         );
         for id in unknown {

@@ -767,6 +767,12 @@ impl Game<'_> {
                 .filter(|(_, l)| l.steps > 0)
                 .filter_map(|(id, l)| l.rotation.map(|r| (*id, (r.0, l.steps))))
                 .collect();
+            // A general row's pitch eases with its yaw (`Entity.lerpPositionAndRotationStep`).
+            let pitches: HashMap<i32, (f32, u32)> = lerps
+                .iter()
+                .filter(|(_, l)| l.steps > 0)
+                .filter_map(|(id, l)| l.rotation.map(|r| (*id, (r.1, l.steps))))
+                .collect();
             // Boats, minecarts, projectiles and the rest ease toward the
             // server's position over three ticks (`lerps`).
             let mut step = |id: u32, at: Vec3| match lerps.get_mut(&(id as i32)) {
@@ -795,6 +801,19 @@ impl Game<'_> {
                 },
             );
             self.tick_remote_projectiles(&mut step);
+            self.tick_remote_general(
+                &mut step,
+                |id, yaw| {
+                    turns.get(&(id as i32)).map_or(yaw, |&(target, steps)| {
+                        super::super::remote_objects::lerp_yaw_step(yaw, target, steps)
+                    })
+                },
+                |id, pitch| {
+                    pitches.get(&(id as i32)).map_or(pitch, |&(target, steps)| {
+                        pitch + (target - pitch) / steps as f32
+                    })
+                },
+            );
             // LightningBolt.tick on a client.
             self.tick_bolts();
         }

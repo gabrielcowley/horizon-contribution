@@ -124,10 +124,14 @@ fn every_ordinary_resident_family_binds_its_actual_owned_slot() {
                 previous: horizon_core::geometry::Vec3::ZERO,
                 velocity: horizon_core::geometry::Vec3::ZERO,
                 rotation: [0.0, 0.0],
+                previous_rotation: [0.0, 0.0],
                 fall_distance: 0.0,
                 payload_version: 1,
                 payload_bytes: Vec::new(),
                 mount: None,
+                local_box: None,
+                needs_sync: false,
+                age: 0,
                 attachment_lifetime: Default::default(),
             });
         bind(game, 4242, Kind::General);

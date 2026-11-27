@@ -32,6 +32,7 @@ impl Game<'_> {
                 yaw: a.previous_yaw + partial * (a.yaw - a.previous_yaw),
                 pitch: a.previous_pitch + partial * (a.pitch - a.previous_pitch),
                 living: None,
+                general: None,
             }
             .into();
             let block = at.map(|x| x.floor() as i32);

@@ -204,11 +204,32 @@ fn template(kind: &str) -> Option<&'static str> {
 }
 
 /// the settings of one entity type: a content mod's type takes its
-/// template's, other unknown types the builder defaults.
+/// template's, a mod's general type its declaration's (`general`), other
+/// unknown types the builder defaults.
 pub fn settings(kind: &str) -> (u8, u32, bool) {
     let row = |kind: &str| TRACKING.binary_search_by(|row| row.0.cmp(kind)).ok();
     let row = row(kind).or_else(|| template(kind).and_then(row));
-    row.map_or((5, 3, true), |i| {
-        (TRACKING[i].1, TRACKING[i].2, TRACKING[i].3)
-    })
+    match row {
+        Some(i) => (TRACKING[i].1, TRACKING[i].2, TRACKING[i].3),
+        None => general(kind).unwrap_or((5, 3, true)),
+    }
+}
+
+/// A mod's general entity type's declared settings: its range in chunks
+/// (below 0 none; a view distance caps it anyway), its update interval (0,
+/// for never, from vanilla's `i32::MAX` and from any interval below 1) and
+/// whether it sends its velocity changes. Out of line, as vanilla's types
+/// never ask.
+#[cold]
+#[inline(never)]
+fn general(kind: &str) -> Option<(u8, u32, bool)> {
+    let declared = mod_api::__private::general_entity_type_declarations()
+        .iter()
+        .find(|d| d.id == kind)?;
+    let range = declared.tracking_chunks.clamp(0, i32::from(u8::MAX)) as u8;
+    let interval = match declared.update_interval {
+        i32::MAX => 0,
+        ticks => u32::try_from(ticks).unwrap_or(0),
+    };
+    Some((range, interval, declared.sends_velocity))
 }

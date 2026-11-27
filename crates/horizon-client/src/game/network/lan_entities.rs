@@ -567,6 +567,7 @@ impl Game<'_> {
             ));
         }
         self.lan_projectile_states(out, after);
+        self.lan_general_states(out, drain_minecart_steps, after);
         for o in self.others.iter().filter(|o| o.id > after) {
             let p = o.position;
             let e = add_state(out, o.id, &o.kind, [p.x, p.y, p.z], o.yaw, false);
@@ -817,6 +818,35 @@ impl Game<'_> {
 
     /// Primed TNT, falling blocks, projectiles, tridents, firework rockets and
     /// end crystals, as guests track them.
+    /// The mods' general entity rows, tracked as vanilla tracks any entity
+    /// (`gap/general-entity-sync`): their type's network id follows vanilla's
+    /// and the content mods' (`with_general_entity_types`), their range,
+    /// update interval and velocity sending come from their declaration
+    /// (`tracking::settings`), and their synced attachments, their box
+    /// among them, follow the add packet in the same flush.
+    /// `drain` is the tick's own pass, which takes a teleport's sync (a late
+    /// join's pass leaves it for the tick's).
+    fn lan_general_states(&mut self, out: &mut States, drain: bool, after: u32) {
+        let catalog = super::general::general_type_catalog();
+        let rows = &mut self.resident_entities.general.rows;
+        for i in 0..rows.len() {
+            let row = &rows[i];
+            if row.id <= after {
+                continue;
+            }
+            let p = row.position;
+            let kind = catalog.key(row.type_slot);
+            let e = add_state(out, row.id, kind, [p.x, p.y, p.z], row.rotation[0], false);
+            e.pitch = row.rotation[1];
+            e.head_yaw = row.rotation[0];
+            e.velocity = [row.velocity.x, row.velocity.y, row.velocity.z];
+            e.needs_sync = row.needs_sync;
+            if drain && row.needs_sync {
+                rows.update(i, |row| row.needs_sync = false);
+            }
+        }
+    }
+
     fn lan_projectile_states(&mut self, out: &mut States, after: u32) {
         let Some(host) = self.lan.as_mut() else {
             return;

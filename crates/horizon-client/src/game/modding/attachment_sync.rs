@@ -54,7 +54,7 @@ impl Game<'_> {
     /// The messages that give a player `holder`'s synced attachments whole: its
     /// own, and for a chunk those of its block entities. A player holder with
     /// none still gives one, to drop what the client holds.
-    fn attachment_snapshot(&mut self, holder: Holder) -> Vec<Message> {
+    pub(in crate::game) fn attachment_snapshot(&mut self, holder: Holder) -> Vec<Message> {
         let changes = match holder {
             // Read in place: a chunk lent to a mod is copied and saved.
             Holder::Chunk([x, z]) => self
@@ -258,6 +258,10 @@ impl Game<'_> {
             map.apply_sync(change);
         }
         self.bind_remote_attachment(message.holder);
+        // A general row's box is one of its synced attachments.
+        if let Holder::Entity(id) = message.holder {
+            self.refresh_general_box(id);
+        }
     }
 
     /// Publish a synced copy once its scoped client holder can be named.

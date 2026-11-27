@@ -5725,6 +5725,12 @@ impl Game<'_> {
             );
             // Text, block and item displays (DisplayRenderer's shadow radius).
             casters.extend(self.text_displays.values().filter_map(|d| d.shadow(a)));
+            // General rows whose renderer asks for a shadow, at vanilla's default strength.
+            casters.extend(
+                self.general_shadow_casters(a)
+                    .into_iter()
+                    .map(|(pos, radius)| (pos, radius, 1.0)),
+            );
             // Packs may move vertices or draw from another view.
             let shadow_view = self
                 .view_frustum

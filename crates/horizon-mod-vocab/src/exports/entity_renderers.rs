@@ -1,3 +1,4 @@
 pub use client::entity_renderers::{
-    EntityRenderState, EntityRenderer, EntityRendererRegistry, EntityRenderers, LivingRenderState,
+    EntityRenderState, EntityRenderer, EntityRendererRegistry, EntityRenderers, GeneralRenderState,
+    LivingRenderState,
 };

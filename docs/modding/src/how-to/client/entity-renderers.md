@@ -1,7 +1,7 @@
 # Drawing an entity type with your own renderer
 
-You can draw content-defined thrown entities and living entity types (mobs, vanilla's or a content
-mod's) with your own renderer. This is the counterpart of
+You can draw content-defined thrown entities, living entity types (mobs, vanilla's or a content
+mod's) and your mod's own general entity types with your own renderer. This is the counterpart of
 NeoForge 26.3's `EntityRenderersEvent.RegisterRenderers` (`registerEntityRenderer`): the mod
 registers one renderer per entity type at start, and the game hands each entity of that type in
 view to it, once a frame. Native and wasm mods register and draw the same way.
@@ -40,6 +40,7 @@ impl EntityRenderer for Bolt {
 | `age` | Ticks lived plus the partial tick (`ageInTicks`). |
 | `yaw`, `pitch` | The way it faces, in degrees, interpolated to the frame (0 is south, positive pitch looks down). |
 | `living` | A living entity's own frame (`LivingRenderState`, below); none for any other entity. |
+| `general` | A general entity's own frame (`GeneralRenderState`, below); none for any other entity. |
 
 The pose stack starts at the entity's interpolated position, in blocks, and is not turned. `draw`
 also has the partial tick, the game time and the entity's light. What `submit` draws replaces the
@@ -97,15 +98,42 @@ scan over the mods.
   load (a reload resolves it again); what it drew that frame is dropped, and until then its type draws
   as it would without one.
 
+### A general entity's frame
+
+A mod's general entity type (`declare_general_entity`) has no drawing of its own: without a
+renderer it draws nothing but its debug hitbox, as vanilla's `NoopRenderer` does. Its renderer's
+state has `general: Some(GeneralRenderState)`:
+
+| `GeneralRenderState` | Meaning |
+| --- | --- |
+| `type_key` | The entity's type (`mymod:crate`). |
+| `local_box` | Its box relative to its position, `[min, max]`: the one `entity_set_bounds` gave it, or its type's width and height. |
+| `attachment(&TYPE)` | Its value of a synced attachment (`sync: true`, with a codec), as the server last sent it; none when it holds none. |
+
+The state never needs a live entity. To draw the type where no entity is, in a screen or a scene,
+build one from data and hand it to the same renderer:
+
+```rust,ignore
+let general = GeneralRenderState::new("mymod:crate", [[-0.5, 0.0, -0.5], [0.5, 1.0, 0.5]])
+    .with_attachment(&LABEL, &label);
+let state = EntityRenderState::of_general(0, partial, age, 0.0, 0.0, general);
+```
+
+A general type may also have the round shadow drawn under its entities, in blocks: register it
+beside the renderer with `registry.shadow_radius("mymod:crate".into(), 0.5)` (vanilla's
+`shadowRadius`; 0, no shadow, by default).
+
 ## What draws through registered renderers
 
-Registered renderers draw two routes:
+Registered renderers draw three routes:
 
 - content-defined thrown types: a `data/<id>/horizon/entity_type/<name>.json` using the
   `minecraft:snowball` template ([content mods](../content-mods.md)) draws the renderer's geometry
   instead of its flying item. Without a renderer, it draws its item;
 - living types drawn as mobs, vanilla's (`minecraft:zombie`) and the content mods' living types: the
-  renderer draws instead of the model and its vanilla layers.
+  renderer draws instead of the model and its vanilla layers;
+- a mod's general entity types, tracked to every client that sees them on vanilla's entity
+  packets: the renderer draws them, with the shadow it asks for.
 
 Registrations for other known entity families, including boats, displays, vanilla projectiles, the
 player (whose model goes by its skin), the armour stand and the ender dragon (which draw through

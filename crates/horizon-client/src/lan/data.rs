@@ -51,7 +51,8 @@ pub const SYNCHRONIZED: &[&str] = &[
     "minecraft:worldgen/block_state_provider",
 ];
 
-/// Append validated load declarations after vanilla, preserving its numeric IDs.
+/// Append validated load declarations after vanilla, preserving its numeric IDs: the custom
+/// stats, and the general entity types (`with_general_entity_types`).
 /// Both the LAN server and a client's prepared built-ins use this same ordering.
 pub fn with_custom_stats(mut builtin: Builtin) -> Builtin {
     let custom = mod_api::__private::custom_stat_declarations();
@@ -68,6 +69,34 @@ pub fn with_custom_stats(mut builtin: Builtin) -> Builtin {
         }
         *ids = horizon_protocol::registry::Ids::from_names(names);
     }
+    with_general_entity_types(builtin)
+}
+
+/// The mods' general entity types get the entity type ids after every other
+/// type's (vanilla's, then the content mods' that the report already holds),
+/// in the frozen registry's order: declaring mod id, then type id. Both
+/// sides run the same both-side mods, so a client names a type by the id its
+/// server sends.
+fn with_general_entity_types(mut builtin: Builtin) -> Builtin {
+    let mut declared: Vec<_> = mod_api::__private::general_entity_type_declarations()
+        .iter()
+        .map(|d| (&d.mod_id, &d.id))
+        .collect();
+    if declared.is_empty() {
+        return builtin;
+    }
+    declared.sort();
+    let ids = builtin
+        .registries
+        .entry("minecraft:entity_type".into())
+        .or_default();
+    let mut names = std::mem::take(&mut ids.names);
+    for (_, id) in declared {
+        if !names.contains(id) {
+            names.push(id.clone());
+        }
+    }
+    *ids = horizon_protocol::registry::Ids::from_names(names);
     builtin
 }
 pub const BIOME_REGISTRY: &str = "minecraft:worldgen/biome";
