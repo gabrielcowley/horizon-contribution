@@ -391,8 +391,7 @@ impl Game<'_> {
         self.advance_live_scene(l, blocks.cells, clock, &added);
         for (i, (mob, e)) in l.mobs.iter_mut().zip(&scene.entities).enumerate() {
             let age = frame.entities.get(i).and_then(|place| place.age);
-            let age = age.unwrap_or(u32::try_from(clock.tick).unwrap_or(u32::MAX));
-            mob.place(e.pos, (e.yaw, e.head_yaw, e.head_pitch), age);
+            pose(mob, e, clock, age);
         }
         self.draw_live(batch, blocks, frame, l, clock.partial)
     }
@@ -634,6 +633,13 @@ impl Game<'_> {
             q.color = lit(q.color, light);
         }
     }
+}
+
+/// `mob` placed and turned as `e` says, `age` ticks old or else at the clock's tick (its age,
+/// which idle animations read): no tick moves it.
+fn pose(mob: &mut Prepared, e: &mod_api::SceneEntity, clock: SceneClock, age: Option<u32>) {
+    let age = age.unwrap_or(u32::try_from(clock.tick).unwrap_or(u32::MAX));
+    mob.place(e.pos, (e.yaw, e.head_yaw, e.head_pitch), age);
 }
 
 /// An entity's quads as scene quads: shaded by face as the scene's blocks are, the

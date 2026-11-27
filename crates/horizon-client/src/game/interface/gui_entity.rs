@@ -32,7 +32,7 @@ const KEPT: usize = 8;
 struct Made {
     kind: String,
     data: Compound,
-    made: Prepared,
+    mob: Prepared,
 }
 
 /// An entity prepared for drawing in a screen or a screen's scene, by the route the world
@@ -221,7 +221,7 @@ impl Game<'_> {
         let prepared: &mut Prepared = match entity {
             GuiEntity::Kind { kind, data } => {
                 let at = self.made_entity(&mut scratch.made, kind, data)?;
-                &mut scratch.made[at].made
+                &mut scratch.made[at].mob
             }
             other => {
                 owned = self.prepare_gui_entity(other)?;
@@ -271,7 +271,7 @@ impl Game<'_> {
             (Prepared::Living(_), None) => false,
             _ => true,
         };
-        let same = |m: &Made| m.kind == kind && m.data == *data && current(&m.made);
+        let same = |m: &Made| m.kind == kind && m.data == *data && current(&m.mob);
         if let Some(at) = made.iter().position(same) {
             return Ok(at);
         }
@@ -282,7 +282,7 @@ impl Game<'_> {
         made.push(Made {
             kind: kind.into(),
             data: data.clone(),
-            made: entity,
+            mob: entity,
         });
         Ok(made.len() - 1)
     }
@@ -431,6 +431,14 @@ impl Game<'_> {
                 );
             }
         }
+    }
+
+    /// `mob`'s geometry around its feet, as the world draws it, seen from its own position.
+    /// Kept for the mods' entity-renderer tests and the internals a native mod may declare.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::game) fn gui_entity_geometry(&self, mob: &Mob, out: &mut Vec<Vertex>) {
+        let p = mob.position;
+        self.gui_entity_geometry_at(mob, 1.0, DVec3::new(p.x, p.y, p.z), out);
     }
 
     /// `mob`'s geometry at `partial` into the tick, around `camera`, as the world draws it:

@@ -297,8 +297,7 @@ fn a_screens_entity_keeps_the_layers_beside_a_registered_renderer() {
             let at = horizon_core::geometry::Vec3::new(0.5, 64.0, 0.5);
             let zombie = Mob::new_remote(93, kind, at, 0.0);
             let mut out = Vec::new();
-            let feet = glam::DVec3::new(at.x, at.y, at.z);
-            game.gui_entity_geometry_at(&zombie, 1.0, feet, &mut out);
+            game.gui_entity_geometry(&zombie, &mut out);
             // Seen from its feet: the renderer's quad 100 up, then the layer's 200 up.
             let heights: Vec<f32> = out
                 .chunks(4)

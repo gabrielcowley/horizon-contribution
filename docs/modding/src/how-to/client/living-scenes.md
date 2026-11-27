@@ -55,8 +55,13 @@ the original cells; the scene's separate entity and particle positions do not fo
 ## Entities
 
 A `SceneEntity` holds the same `GuiEntity` that `DrawContext::entity` draws: a new entity
-of a living type, with optional saved data (a baby, a sheep's colour), or an entity of the
-client's level as it is this frame. It is prepared and drawn by that same path: its type's
+of a living type, with optional saved data (a baby, a sheep's colour), a dropped item
+(`minecraft:item`, whose data needs its `Item`), a minecart of any kind, an entity of the
+client's level as it is this frame, or a mod's general type built from data
+(`GuiEntity::general` with a `GeneralRenderState`: its type, box and synced attachment
+values). An item, a minecart or a general type is drawn by the route the world draws it
+with: `ItemEntityRenderer`'s bob and spin, the minecart's body and display block, or the
+renderer the general type registered (none draws nothing). A living one is drawn by its type's
 renderer as in the world (a mod's `register_entity_renderers` renderer in place of the
 vanilla model, then the `register_entity_layers` layers), full bright, shaded by face like
 the scene's blocks and sorted with them by depth. Its feet stand at `pos` in the scene's
@@ -65,7 +70,12 @@ south).
 
 The entity is made for drawing only. It never joins a level and never ticks, and no mod
 part's `register_goals` runs for it. Its age is the clock's tick, so the model's idle
-animations follow the scene's clock. A scene takes at most 16 entities.
+animations and an item's bob follow the scene's clock. A scene takes at most 16 entities.
+
+`SceneParts::entities` changes that for the entities it names, by index. A `SceneEntityPart`
+with `in_group(g)` moves, turns and hides its entity with group `g` and lights it with the group's
+light, as a minecart rides a moving section; its `pos` stays in the scene's coordinates before
+the group's pose. `aged(t)` gives it an age of its own in place of the clock's tick.
 
 ## Mod block entities
 
@@ -264,6 +274,7 @@ A bad part refuses the whole draw with a `ScenePartsError` and changes nothing k
 | `TooManyOverlays`, `BadOverlay { index }` | An overlay |
 | `NoBlock { index }` | Saved data or a breaking stage for a block the scene doesn't have |
 | `BadBiome` | A biome the game doesn't have |
+| `BadEntityPart { index }` | An entity part naming no entity, no group, or an entity another part names |
 
 ## Refusals
 
@@ -279,8 +290,8 @@ returns a `SceneError`:
 | `TooManyParticles` | More than `SCENE_MAX_PARTICLES` (512) particles to add at once |
 | `TooManyScenes` | Four other scenes animated this frame; the blocks and last state were drawn |
 | `BadBlock { index }` | A block state the game doesn't have |
-| `UnknownType { index }` | No living entity type by that id, as `DrawContext::entity` refuses it |
-| `BadData { index }` | Entity data naming another type, or that doesn't load |
+| `UnknownType { index }` | No entity type the client can draw by that id, as `DrawContext::entity` refuses it |
+| `BadData { index }` | Entity data naming another type, or that doesn't load (an item without its `Item`) |
 | `NoEntity { index }` | A handle naming no living entity of the client's level |
 | `BadEntity { index }` | A position or turn that isn't finite, or a position more than 30 million blocks out |
 | `BadParticle { index }` | Particle options, a position or a velocity that isn't finite, or options that name a stack |
@@ -293,3 +304,6 @@ returns a `SceneError`:
 - Additive (glowing) particle quads and pack (Polytone) particles are not drawn in scenes.
 - A scene's blocks have no light, so a block whose animate tick reads light behaves as
   it would in the dark.
+- Of the game's non-living entities, only dropped items and minecarts are drawn in scenes and
+  screens; other types (boats, paintings, arrows) are refused as unknown. A minecart is drawn
+  without its rail, so it never tilts on a slope.
