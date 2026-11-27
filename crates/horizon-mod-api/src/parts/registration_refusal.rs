@@ -70,6 +70,7 @@ impl PartRegistrar {
             arm_poses,
             structure_types,
             feature_types,
+            placement_modifier_types,
             dimensions,
             chunk_generators,
             biome_sources,

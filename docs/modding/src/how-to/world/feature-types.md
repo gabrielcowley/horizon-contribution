@@ -75,4 +75,50 @@ stateless and deterministic. These traits also work in `mod.wasm`; its calls run
 dependency group's store lock and call budget, as structure types' do.
 
 Entities, block entities, scheduled ticks and nested placement from a mod's feature are not
-available yet, and custom placement modifiers are not registrable.
+available yet.
+
+## Placement modifier types
+
+Register a `PlacementModifierType` in `Hooks::register` to filter or fan out a placed feature's
+positions by your own code. An entry of a data pack placed feature's `placement` list with
+`"type": "mymod:filter"` then runs it wherever the game places that placed feature: biome
+decoration, nested placed features and growth:
+
+```rust,ignore
+fn register(&self, registrar: &mut dyn Registrar, _: &RegistrationContext) {
+    registrar.register_placement_modifier_type("filter", FilterType);
+}
+```
+
+```json
+{ "feature": "mymod:vein", "placement": [ { "type": "mymod:filter" }, { "type": "minecraft:in_square" } ] }
+```
+
+IDs follow the feature types' rules above. `PlacementModifierType::decode(&self, config: &Tag,
+decode: &mut dyn FeatureDecode)` decodes the entry (without `type`) once, at load, with the same
+decoders; an `Err` refuses the placed feature.
+
+`PlacementModifier::modify(&self, context: &mut dyn PlacementModifierContext, origin)` is vanilla's
+`PlacementModifier.modify`: call `context.emit(pos)` for each output position, in order (vanilla's
+`Consumer<BlockPos>`). Emit nothing to filter the origin out, the origin once to pass it through, or
+several positions to fan it out. The game runs the next modifier, or the feature, on each, depth
+first, as vanilla's `FeaturePlacer` does, so your draws interleave with theirs.
+
+| `PlacementModifierContext` access | Vanilla |
+|---|---|
+| `emit` | The output `Consumer<BlockPos>` |
+| `random` | The chain's own `RandomSource`: decoration's seeded random, the nested placed feature's caller's or the growing block's |
+| `min_y` | `PlacementContext.getMinY` |
+| `height` | `PlacementContext.getHeight` |
+| `block` | `PlacementContext.getBlockState`; `None` outside the world's sections, never a chunk load |
+| `metadata` | Block metadata to read properties |
+
+A modifier writes nothing. Its positions reach the chain only when the call returns `Ok`. A call
+that returns `Err`, panics or traps passes none of them on and fails the placed feature; the game
+logs the type and the origin and switches the type off for the session. A call may make at most
+65,536 reads and emit at most 65,536 positions.
+
+A modifier may read a value your mod keeps current, such as a config switch held in an atomic,
+on each call: a change then applies to chunks generated after it, with no `/reload`. Keep
+anything else stateless and deterministic.
+

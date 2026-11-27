@@ -13,6 +13,15 @@ pub(crate) fn installed_feature_type_list() -> &'static [crate::world::feature_t
     installed().map_or(&[], |installed| installed.feature_types.as_slice())
 }
 
+/// The placement-modifier types registered at startup, for the executable to hand to the
+/// engine's placement decoder.
+pub(crate) fn installed_placement_modifier_type_list()
+-> &'static [crate::world::placement_modifier_type::PlacementModifierTypeInfo] {
+    installed().map_or(&[], |installed| {
+        installed.placement_modifier_types.as_slice()
+    })
+}
+
 impl dyn Registrar + '_ {
     /// Register structure type `name` (`tower` or `mymod:tower`), the way
     /// NeoForge's registries `STRUCTURE_TYPE` and `STRUCTURE_PIECE` register
@@ -37,6 +46,21 @@ impl dyn Registrar + '_ {
     pub fn register_feature_type<T: crate::FeatureType>(&mut self, name: &str, ty: T) {
         self.add_feature_type(name, Arc::new(ty));
     }
+    /// Register placement-modifier type `name` (`filter` or `mymod:filter`), the way NeoForge's
+    /// registry `PLACEMENT_MODIFIER_TYPE` registers once at startup: an entry of a data pack
+    /// placed feature's `placement` list with `"type": "mymod:filter"` is then decoded once by
+    /// `ty` when the pack loads, and runs by the modifier it decoded wherever the game places
+    /// that placed feature: decoration, nested placed features and growth. The type's id is in
+    /// a namespace owned by the calling mod's manifest; another mod's namespace, an empty name
+    /// and an id registered twice refuse the mods at startup, naming the mod. Vanilla's own
+    /// types keep their ids.
+    pub fn register_placement_modifier_type<T: crate::PlacementModifierType>(
+        &mut self,
+        name: &str,
+        ty: T,
+    ) {
+        self.add_placement_modifier_type(name, Arc::new(ty));
+    }
 }
 
 /// Registrar operations for structures and worldgen features.
@@ -50,4 +74,13 @@ pub trait StructuresRegistrar {
     ///
     /// On WebAssembly, worker calls run under the linked group's store lock and call budget.
     fn add_feature_type(&mut self, name: &str, ty: Arc<dyn crate::FeatureType>);
+    /// Register placement-modifier type `name` with `ty`; mods reach it through
+    /// `register_placement_modifier_type`.
+    ///
+    /// On WebAssembly, worker calls run under the linked group's store lock and call budget.
+    fn add_placement_modifier_type(
+        &mut self,
+        name: &str,
+        ty: Arc<dyn crate::PlacementModifierType>,
+    );
 }

@@ -40,6 +40,8 @@ pub(crate) struct Installed {
     pub(crate) arm_poses: Vec<crate::client::arm_pose::PoseInfo>,
     pub(crate) structure_types: Vec<crate::world::structure_type::StructureTypeInfo>,
     pub(crate) feature_types: Vec<crate::world::feature_type::FeatureTypeInfo>,
+    pub(crate) placement_modifier_types:
+        Vec<crate::world::placement_modifier_type::PlacementModifierTypeInfo>,
     pub(crate) dimensions: Vec<crate::world::dimension::DimensionInfo>,
     pub(crate) chunk_generators: Vec<crate::world::chunk_generator::ChunkGeneratorInfo>,
     pub(crate) biome_sources: Vec<crate::world::biome_source::BiomeSourceInfo>,

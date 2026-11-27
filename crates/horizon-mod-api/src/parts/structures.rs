@@ -114,6 +114,56 @@ pub mod tests {
         assert!(errors[0].contains("test registered feature type test:vein twice"));
         assert!(errors[1].contains("namespace"));
     }
+
+    /// A placement-modifier type in the mod's namespace is handed over; the same id twice and
+    /// another mod's namespace refuse the mods at startup, naming the mod.
+    #[test]
+    pub(crate) fn duplicate_and_foreign_placement_modifier_types_refuse_registration() {
+        struct Filter;
+        impl mod_api::PlacementModifierType for Filter {
+            fn decode(
+                &self,
+                _: &mod_api::Tag,
+                _: &mut dyn mod_api::FeatureDecode,
+            ) -> Result<std::sync::Arc<dyn mod_api::PlacementModifier>, mod_api::FeatureError>
+            {
+                Err(mod_api::FeatureError("fixture has no modifiers".into()))
+            }
+        }
+        struct Valid;
+        #[mod_api::__subscriptions]
+        impl Hooks for Valid {
+            fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+                r.register_placement_modifier_type("filter", Filter);
+            }
+        }
+        crate::parts::tests::install_parts_fixture(&[ModEntry::new("test", Box::new(Valid))])
+            .unwrap();
+        let types = crate::__private::placement_modifier_type_declarations();
+        assert_eq!(
+            types.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            ["test:filter"]
+        );
+
+        struct Invalid;
+        #[mod_api::__subscriptions]
+        impl Hooks for Invalid {
+            fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+                r.register_placement_modifier_type("filter", Filter);
+                r.register_placement_modifier_type("filter", Filter);
+                r.register_placement_modifier_type("other:filter", Filter);
+            }
+        }
+        let errors = install_parts(
+            &[ModEntry::new("test", Box::new(Invalid))],
+            &crate::parts::tests::rule_schema(),
+            |_| false,
+        )
+        .unwrap_err();
+        assert_eq!(errors.len(), 2);
+        assert!(errors[0].contains("test registered placement modifier type test:filter twice"));
+        assert!(errors[1].contains("namespace"));
+    }
 }
 
 impl StructuresRegistrar for PartRegistrar {
@@ -155,5 +205,27 @@ impl StructuresRegistrar for PartRegistrar {
         }
         self.feature_types
             .push(FeatureTypeInfo { id: id.into(), ty });
+    }
+    fn add_placement_modifier_type(
+        &mut self,
+        name: &str,
+        ty: Arc<dyn crate::PlacementModifierType>,
+    ) {
+        let id = match self.owned_declaration_id(name) {
+            Ok(id) => id,
+            Err(reason) => {
+                self.refused.push(reason);
+                return;
+            }
+        };
+        if self.placement_modifier_types.iter().any(|t| *t.id == *id) {
+            self.refused.push(format!(
+                "{} registered placement modifier type {id} twice",
+                self.mod_id
+            ));
+            return;
+        }
+        self.placement_modifier_types
+            .push(PlacementModifierTypeInfo { id: id.into(), ty });
     }
 }

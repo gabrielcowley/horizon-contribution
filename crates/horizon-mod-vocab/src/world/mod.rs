@@ -24,6 +24,7 @@ pub(crate) mod dimension_transition;
 pub(crate) mod explosion_settings;
 pub(crate) mod feature_type;
 pub(crate) mod game_rule_value;
+pub(crate) mod placement_modifier_type;
 // hidden: a module of game-side types; mods use their re-exports
 #[doc(hidden)]
 pub mod ground;

@@ -20,7 +20,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-fn engine_heightmap(kind: HeightmapType) -> horizon_world::heightmap::HeightmapType {
+pub(super) fn engine_heightmap(kind: HeightmapType) -> horizon_world::heightmap::HeightmapType {
     use horizon_world::heightmap::HeightmapType as Engine;
     match kind {
         HeightmapType::WorldSurfaceWg => Engine::WorldSurfaceWg,
@@ -35,13 +35,13 @@ fn engine_heightmap(kind: HeightmapType) -> horizon_world::heightmap::HeightmapT
 
 /// The block snapshot a decoded feature converts its states through: the registry's own
 /// worker index, kept with the feature.
-struct Held {
-    index: Arc<Index>,
-    metadata: &'static Blocks,
+pub(super) struct Held {
+    pub(super) index: Arc<Index>,
+    pub(super) metadata: &'static Blocks,
     air: [Option<BlockKey>; 3],
 }
 impl Held {
-    fn of(registry: &horizon_world::registry::BlockRegistry) -> Result<Self, String> {
+    pub(super) fn of(registry: &horizon_world::registry::BlockRegistry) -> Result<Self, String> {
         let index = super::native_worldgen::prepare(registry)?;
         let metadata = mod_api::__private::block_definitions()
             .ok_or_else(|| "block metadata is unavailable".to_owned())?;
@@ -57,7 +57,10 @@ impl Held {
             air,
         })
     }
-    fn to_api(&self, state: horizon_world::registry::BlockStateId) -> Option<BlockState> {
+    pub(super) fn to_api(
+        &self,
+        state: horizon_world::registry::BlockStateId,
+    ) -> Option<BlockState> {
         self.index.to_api(state).ok()
     }
 }
@@ -70,9 +73,9 @@ fn json(value: &Tag) -> Result<serde_json::Value, FeatureError> {
 }
 
 /// The engine's decoders, as a [`FeatureDecode`].
-struct Decoder<'a> {
-    parts: &'a mut dyn ModFeatureParts,
-    held: &'a Held,
+pub(super) struct Decoder<'a> {
+    pub(super) parts: &'a mut dyn ModFeatureParts,
+    pub(super) held: &'a Held,
 }
 impl Decoder<'_> {
     fn state(&mut self, value: &serde_json::Value) -> Result<BlockState, FeatureError> {
