@@ -2,7 +2,7 @@
 use crate::game::{
     Game,
     api_values::TryIntoEngine,
-    native_scene::{SceneBlocks, SceneFrame, SceneLook, apply_block_parts},
+    native_scene::{SceneBlocks, SceneFrame, SceneLook, apply_block_parts, entity_places},
 };
 use mod_api::{prelude::*, *};
 
@@ -200,7 +200,9 @@ impl DrawContext for GameDrawContext<'_, '_> {
             Some(clock) if !clock.partial.is_finite() => return Err(SceneError::BadClock.into()),
             clock => clock.map(|clock| (clock.tick, clock.partial)),
         };
-        let frame = SceneFrame::new(rect, view).with_parts(&self.game.gui.atlas, look, parts)?;
+        let mut frame =
+            SceneFrame::new(rect, view).with_parts(&self.game.gui.atlas, look, parts)?;
+        frame.entities = entity_places(parts, scene.entities.len())?;
         let mut cells = crate::game::api_values::aggregates::scene_blocks(&scene.blocks)?;
         apply_block_parts(&mut cells, parts)?;
         let blocks = SceneBlocks::grouped(&cells, &parts.groups)?;

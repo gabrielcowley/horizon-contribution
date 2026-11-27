@@ -1,23 +1,28 @@
-//! A living entity drawn in a screen (`DrawContext::entity`): vanilla's
+//! An entity drawn in a screen (`DrawContext::entity`): vanilla's
 //! `InventoryScreen.renderEntityInInventoryFollowsMouse` and
 //! `renderEntityInInventory`, which recipe viewers' mob pages, Jade's entity
-//! icon and Hostile Neural Networks' deep learner draw their mobs with.
+//! icon and Hostile Neural Networks' deep learner draw their mobs with. A
+//! screen scene's entities (`SceneEntity`) are described the same way.
 
 use crate::Compound;
 
-/// Which living entity [`DrawContext::entity`](crate::DrawContext::entity) draws.
+/// Which entity [`DrawContext::entity`](crate::DrawContext::entity) draws.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
 pub enum GuiEntity {
-    /// A new entity of living type `kind` (`minecraft:zombie`, `mymod:golem`), made
-    /// for the screen and never added to a level, loaded from `data` as `/summon
-    /// <kind> ~ ~ ~ <data>` reads it (`{IsBaby:1b}`, a variant); empty `data` is
-    /// the type's defaults. The game keeps the few it made last, so drawing the
-    /// same `kind` and `data` every frame makes it once, as a screen that keeps
-    /// its `LivingEntity` does.
+    /// A new entity of type `kind`, made for the screen and never added to a
+    /// level, loaded from `data` as `/summon <kind> ~ ~ ~ <data>` reads it
+    /// (`{IsBaby:1b}`, a variant); empty `data` is the type's defaults. The game
+    /// keeps the few it made last, so drawing the same `kind` and `data` every
+    /// frame makes it once, as a screen that keeps its `LivingEntity` does.
+    ///
+    /// `kind` is a living type (`minecraft:zombie`, `mymod:golem`), a dropped
+    /// item (`minecraft:item` with `{Item:{id:"minecraft:apple",count:1}}`,
+    /// which it needs) or a minecart of any kind (`minecraft:chest_minecart`).
+    /// Other types the client draws no route for here are refused as unknown.
     Kind {
-        /// The living entity type's id.
+        /// The entity type's id.
         kind: String,
         /// The entity's saved fields, without `id` or `Pos`.
         data: Compound,
@@ -26,6 +31,12 @@ pub enum GuiEntity {
     /// its pose), turned for the screen: what `InventoryScreen` draws the
     /// player with. The handle is a client handle (`ClientHost::crosshair_target`).
     Existing(crate::EntityRef),
+    /// An entity of a mod's general type (`declare_general_entity`), built from
+    /// data alone as [`EntityRenderState::of_general`](crate::EntityRenderState::of_general)
+    /// builds its frame: its type, box and synced attachment values. It is drawn
+    /// by the renderer its type registered (`register_entity_renderers`), as in
+    /// the world; a type with no renderer draws nothing.
+    General(crate::GeneralRenderState),
 }
 
 impl GuiEntity {
@@ -46,6 +57,10 @@ impl GuiEntity {
     /// An entity of the client's level.
     pub fn existing(entity: crate::EntityRef) -> Self {
         Self::Existing(entity)
+    }
+    /// An entity of a general type, drawn from `state`.
+    pub fn general(state: crate::GeneralRenderState) -> Self {
+        Self::General(state)
     }
 }
 
@@ -104,12 +119,14 @@ impl GuiEntityView {
 #[non_exhaustive]
 #[derive(horizon_mod_api_macros::Wire)]
 pub enum GuiEntityError {
-    /// No living entity type has that id (unknown, or not a living type).
+    /// No entity type the client can draw here has that id (unknown, or a type
+    /// with no route: neither living, nor an item, nor a minecart, nor general).
     UnknownType,
     /// `data` names a different type in its `id`, or doesn't load as that type.
     BadData,
     /// The handle names no living entity of the client's level: stale, gone,
-    /// a server handle, or an entity that isn't living.
+    /// a server handle, or an entity that isn't living. Only living entities of
+    /// the level are drawn by handle.
     NoEntity,
     /// The box is empty, or `size`, `offset_y` or the look isn't finite, or
     /// `size` isn't positive.
@@ -121,7 +138,7 @@ pub enum GuiEntityError {
 impl std::fmt::Display for GuiEntityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::UnknownType => "no living entity type by that id",
+            Self::UnknownType => "no entity type the client can draw by that id",
             Self::BadData => "the entity data doesn't load as that type",
             Self::NoEntity => "the handle names no living entity of the client's level",
             Self::BadView => "the view's box, size, offset or look is not drawable",

@@ -921,6 +921,49 @@ impl Game<'_> {
         self.item_entity_geometry(camera, taken, out);
     }
 
+    /// `ItemEntityRenderer.submit` for a dropped item standing in a screen's scene, around
+    /// `camera`: bobbing and spinning by its age `partial` into the tick, full
+    /// bright, unshaded and never culled. It joins no level, so nothing but its stack and age is read.
+    pub(in crate::game) fn scene_item_geometry(
+        &self,
+        item: &horizon_client::entities::ItemEntity,
+        partial: f32,
+        camera: glam::DVec3,
+        out: &mut Vec<Vertex>,
+    ) {
+        let q = item.position;
+        let owner = owner_at([q.x, q.y, q.z], 0.0, "minecraft:item");
+        let state = self.resolve_item_uncached_into(
+            &item.stack,
+            DisplayContext::Ground,
+            Some(&owner),
+            item.id as i32,
+            CitHand::Main,
+            Vec::new(),
+        );
+        if state.is_empty() {
+            return;
+        }
+        let (lo, hi) = state.bounding_box();
+        let age = item.age as f32 + partial;
+        let bob = (age / 10.0 + item.bob_offset).sin() * 0.1 + 0.1;
+        let pose = glam::Mat4::from_translation((glam::DVec3::new(q.x, q.y, q.z) - camera).as_vec3())
+            * glam::Mat4::from_translation(glam::Vec3::new(0.0, bob - lo.y + 0.0625, 0.0))
+            * glam::Mat4::from_rotation_y(item_render::item_spin(age, item.bob_offset));
+        let seed = i64::from(self.pack.item_renderer.item_id(&item.stack.item))
+            + i64::from(item.stack.damage);
+        let (copies, count) = item_render::cluster_poses_stack(
+            pose,
+            item_render::rendered_amount(item.stack.count),
+            seed,
+            hi.z - lo.z,
+        );
+        // Unlit: the scene shades its entities' faces itself.
+        for &copy in &copies[..count] {
+            self.submit_item_unlit(&state, copy, mod_api::SCENE_FULL_BRIGHT, out);
+        }
+    }
+
     fn item_entity_geometry<'a>(
         &self,
         camera: glam::DVec3,

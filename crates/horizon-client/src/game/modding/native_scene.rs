@@ -87,6 +87,43 @@ impl SceneLook {
     }
 }
 
+/// Where a scene entity stands among the groups, and its age: `SceneParts::entities`,
+/// checked.
+#[derive(Clone, Copy, Default)]
+pub(super) struct EntityPlace {
+    /// Its group's index in `SceneParts::groups`.
+    pub(super) group: Option<usize>,
+    pub(super) age: Option<u32>,
+}
+
+/// `parts`' entity parts for a scene of `entities` entities, one place per entity (none at
+/// all when no part names one).
+pub(super) fn entity_places(
+    parts: &SceneParts,
+    entities: usize,
+) -> Result<Vec<EntityPlace>, ScenePartsError> {
+    if parts.entities.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut places = vec![None; entities];
+    for (index, part) in (0u32..).zip(&parts.entities) {
+        let bad = ScenePartsError::BadEntityPart { index };
+        let group = part.group.map(|g| g as usize);
+        if group.is_some_and(|g| g >= parts.groups.len()) {
+            return Err(bad);
+        }
+        let place = places.get_mut(part.entity as usize).ok_or(bad)?;
+        if place.is_some() {
+            return Err(bad);
+        }
+        *place = Some(EntityPlace {
+            group,
+            age: part.age,
+        });
+    }
+    Ok(places.into_iter().map(Option::unwrap_or_default).collect())
+}
+
 /// Vanilla's default water colour (`Biome`'s `water_color` default, plains'), for a scene
 /// that names no biome.
 const DEFAULT_WATER: u32 = 0x3F_76E4;
@@ -165,6 +202,13 @@ impl<'a, 'b> SceneBlocks<'a, 'b> {
         Ok(blocks)
     }
 
+    /// Group `group`'s pose (an index in `SceneParts::groups`), light and whether it is
+    /// drawn.
+    pub(super) fn group(&self, group: usize) -> Option<(Affine3A, u32, bool)> {
+        let pose = self.poses.get(group)?;
+        Some((pose.transform, pose.light, pose.drawn))
+    }
+
     /// Culling group `group`'s pose; none for the stationary blocks.
     fn pose(&self, group: usize) -> Option<&SectionPose> {
         group.checked_sub(1).and_then(|at| self.poses.get(at))
@@ -227,6 +271,8 @@ pub(super) struct SceneFrame {
     pub(super) rect: [f32; 4],
     pub(super) view: SceneView,
     pub(super) look: SceneLook,
+    /// Each scene entity's place, by its index; empty when every entity stands still.
+    pub(super) entities: Vec<EntityPlace>,
     matrix: Mat4,
     projected: Vec<ProjectedQuad>,
     overlays: Vec<ProjectedOverlay>,
@@ -238,6 +284,7 @@ impl SceneFrame {
             rect,
             view,
             look: SceneLook::default(),
+            entities: Vec::new(),
             matrix: scene_matrix(rect, view),
             projected: Vec::new(),
             overlays: Vec::new(),
@@ -459,7 +506,7 @@ pub(super) fn shaded(color: u32, shade: f32) -> u32 {
 }
 
 /// `color` (ABGR) times `light` (ABGR, alpha ignored), channel by channel.
-fn lit(color: u32, light: u32) -> u32 {
+pub(super) fn lit(color: u32, light: u32) -> u32 {
     let ch = |s: u32| ((color >> s & 255) * (light >> s & 255) / 255) << s;
     (color & 0xFF00_0000) | ch(0) | ch(8) | ch(16)
 }
@@ -540,7 +587,7 @@ impl Game<'_> {
     /// world this frame: block light in bits 8..16 and sky light in bits 0..8, each 16
     /// times its level. Full bright is white, so a scene that never sets a light draws as
     /// it did. Without a renderer (a test) it is the lightmap's grey curve.
-    fn scene_light(&self, light: u32) -> u32 {
+    pub(super) fn scene_light(&self, light: u32) -> u32 {
         if light == SCENE_FULL_BRIGHT {
             return 0xFFFF_FFFF;
         }
@@ -740,6 +787,7 @@ impl Game<'_> {
             matrix: m,
             projected: mut seen,
             overlays,
+            ..
         } = frame;
         if !self.native_window() {
             return Err(mod_api::SceneError::Unavailable);
@@ -1165,6 +1213,32 @@ mod tests {
             SceneLook::of(&SceneParts::new(), plains).unwrap().biome,
             None
         );
+    }
+
+    #[test]
+    fn each_entity_part_names_one_entity_of_the_scene_and_a_group_it_has() {
+        use mod_api::SceneEntityPart as Part;
+        let group = SceneGroup::new(SceneSection::new(0, 1, [0.0; 3], [0.0; 3], [0.0; 3]));
+        let parts = |entities| {
+            SceneParts::new()
+                .with_groups(vec![group; 2])
+                .with_entities(entities)
+        };
+        assert!(entity_places(&parts(Vec::new()), 3).unwrap().is_empty());
+        let places =
+            entity_places(&parts(vec![Part::new(2).in_group(1).aged(9), Part::new(0)]), 3).unwrap();
+        let seen: Vec<_> = places.iter().map(|p| (p.group, p.age)).collect();
+        assert_eq!(seen, [(None, None), (None, None), (Some(1), Some(9))]);
+        for (entities, index) in [
+            (vec![Part::new(0), Part::new(3)], 1),
+            (vec![Part::new(0).in_group(2)], 0),
+            (vec![Part::new(1), Part::new(0), Part::new(1).aged(2)], 2),
+        ] {
+            assert_eq!(
+                entity_places(&parts(entities), 3).err(),
+                Some(ScenePartsError::BadEntityPart { index })
+            );
+        }
     }
 
     #[test]

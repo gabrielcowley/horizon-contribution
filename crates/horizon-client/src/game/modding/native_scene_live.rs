@@ -4,9 +4,10 @@
 //! game keeps the block entities' own fields, a small level of the scene's blocks, its own
 //! particle engine and its entities. None of that is the client's level or particle engine.
 use super::api_values::TryIntoEngine as _;
+use super::gui_entity::Prepared;
 use super::{
     Game,
-    native_scene::{SceneBlock, SceneBlocks, SceneFrame, SceneQuad, Shade, face_shade, shaded},
+    native_scene::{SceneBlock, SceneBlocks, SceneFrame, SceneQuad, Shade, face_shade, lit, shaded},
 };
 use glam::{DVec3, Quat, Vec3};
 use horizon_client::{
@@ -14,11 +15,9 @@ use horizon_client::{
     chunk::Chunk,
     hud::HudBatch,
     mesher::Vertex,
-    mobs::Mob,
     particles::{ParticleEngine, ParticleLevel, ParticleOptions},
     world::World,
 };
-use horizon_core::geometry::Vec3 as Position;
 use mod_api::{
     BlockEntityTypeKey, GuiEntity, GuiEntityError, ModBlockEntity, SCENE_ANIMATE_PICKS,
     SCENE_CATCH_UP, SCENE_MAX_ANIMATING, SCENE_MAX_ENTITIES, SCENE_MAX_PARTICLES, Scene,
@@ -79,7 +78,7 @@ struct Live {
     picks: Vec<[i32; 3]>,
     engine: ParticleEngine,
     /// One per scene entity, in order.
-    mobs: Vec<Mob>,
+    mobs: Vec<Prepared>,
     /// Geometry scratch, kept so a frame allocates none.
     verts: Vec<Vertex>,
 }
@@ -390,8 +389,10 @@ impl Game<'_> {
             l.mobs[index] = mob;
         }
         self.advance_live_scene(l, blocks.cells, clock, &added);
-        for (mob, e) in l.mobs.iter_mut().zip(&scene.entities) {
-            pose(mob, e, clock);
+        for (i, (mob, e)) in l.mobs.iter_mut().zip(&scene.entities).enumerate() {
+            let age = frame.entities.get(i).and_then(|place| place.age);
+            let age = age.unwrap_or(u32::try_from(clock.tick).unwrap_or(u32::MAX));
+            mob.place(e.pos, (e.yaw, e.head_yaw, e.head_pitch), age);
         }
         self.draw_live(batch, blocks, frame, l, clock.partial)
     }
@@ -401,10 +402,11 @@ impl Game<'_> {
         &self,
         batch: &mut HudBatch,
         blocks: &SceneBlocks<'_, '_>,
-        frame: SceneFrame,
+        mut frame: SceneFrame,
         l: &mut Live,
         partial: f32,
     ) -> Result<(), SceneError> {
+        let places = std::mem::take(&mut frame.entities);
         let Live {
             tick,
             block_entities,
@@ -420,11 +422,20 @@ impl Game<'_> {
             frame,
             Some((*tick, partial, block_entities)),
             |quads| {
-                for mob in mobs.iter() {
+                for (i, mob) in mobs.iter().enumerate() {
+                    let place = places.get(i).copied().unwrap_or_default();
+                    let group = place.group.and_then(|g| blocks.group(g));
+                    if group.is_some_and(|(_, _, drawn)| !drawn) {
+                        continue;
+                    }
                     verts.clear();
                     // `DrawContext::entity`'s submission, in the scene's coordinates.
-                    self.gui_entity_geometry_at(mob, partial, DVec3::ZERO, verts);
+                    self.prepared_geometry_at(mob, partial, DVec3::ZERO, verts);
+                    let start = quads.len();
                     entity_quads(verts, quads);
+                    if let Some((transform, light, _)) = group {
+                        self.place_in_group(&mut quads[start..], transform, light);
+                    }
                 }
                 verts.clear();
                 let base = facing_viewer(view);
@@ -612,17 +623,17 @@ impl Game<'_> {
     }
 }
 
-/// `mob` placed and turned as `e` says, at the clock's tick (its age, which idle
-/// animations read): no tick moves it.
-fn pose(mob: &mut Mob, e: &mod_api::SceneEntity, clock: SceneClock) {
-    let [x, y, z] = e.pos;
-    mob.position = Position::new(x, y, z);
-    mob.previous = mob.position;
-    (mob.yaw, mob.previous_yaw) = (e.yaw, e.yaw);
-    (mob.body_yaw, mob.previous_body_yaw) = (e.yaw, e.yaw);
-    (mob.head_yaw, mob.previous_head_yaw) = (e.head_yaw, e.head_yaw);
-    (mob.head_pitch, mob.previous_head_pitch) = (e.head_pitch, e.head_pitch);
-    mob.age = clock.tick as u32;
+impl Game<'_> {
+    /// Entity quads moved by their group's `transform` and lit by its packed `light`, as the
+    /// group's own blocks are.
+    fn place_in_group(&self, quads: &mut [SceneQuad], transform: glam::Affine3A, light: u32) {
+        let light = self.scene_light(light);
+        for q in quads {
+            q.corners = q.corners.map(|c| transform.transform_point3(c));
+            q.normal = transform.transform_vector3(q.normal);
+            q.color = lit(q.color, light);
+        }
+    }
 }
 
 /// An entity's quads as scene quads: shaded by face as the scene's blocks are, the

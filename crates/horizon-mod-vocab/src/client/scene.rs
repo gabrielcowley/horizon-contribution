@@ -567,6 +567,45 @@ impl SceneFace {
     }
 }
 
+/// Where a scene entity stands among a scene's groups, and how old it is: what
+/// [`SceneParts::entities`] gives an entity of `Scene::entities`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, horizon_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub struct SceneEntityPart {
+    /// The entity's index in `Scene::entities`.
+    pub entity: u32,
+    /// The group (an index in [`SceneParts::groups`]) it moves, turns and is lit with,
+    /// and is hidden with when the group is not drawn, as a parrot or a minecart rides
+    /// Ponder's sections. Its `pos` stays in the scene's coordinates before the pose.
+    /// None stands it still, full bright.
+    pub group: Option<u32>,
+    /// Its age in ticks, which a renderer's motion of its own reads (a dropped item's
+    /// bob and spin, a mob's idle swing). None ages it with the scene's clock, as
+    /// `draw_scene` does.
+    pub age: Option<u32>,
+}
+
+impl SceneEntityPart {
+    /// Entity `entity`, standing still and aged with the scene's clock.
+    pub fn new(entity: u32) -> Self {
+        Self {
+            entity,
+            group: None,
+            age: None,
+        }
+    }
+    /// The same entity in group `group`.
+    pub fn in_group(mut self, group: u32) -> Self {
+        self.group = Some(group);
+        self
+    }
+    /// The same entity `age` ticks old.
+    pub fn aged(mut self, age: u32) -> Self {
+        self.age = Some(age);
+        self
+    }
+}
+
 /// How a scene's faces are shaded.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
@@ -626,6 +665,9 @@ pub struct SceneParts {
     /// the same, when its blocks, block entities or entities change. Without it such a change
     /// starts the scene over, as `draw_scene` does. A tick behind the last one always does.
     pub keep_particles: bool,
+    /// The group and age of entities of `Scene::entities`, at most one part each. An
+    /// entity without one stands still, full bright, aged with the scene's clock.
+    pub entities: Vec<SceneEntityPart>,
 }
 
 impl SceneParts {
@@ -673,6 +715,11 @@ impl SceneParts {
     /// The same parts with blocks broken to a destroy stage, by block index.
     pub fn with_breaking(mut self, breaking: Vec<(u32, u8)>) -> Self {
         self.breaking = breaking;
+        self
+    }
+    /// The same parts with `entities`' groups and ages.
+    pub fn with_entities(mut self, entities: Vec<SceneEntityPart>) -> Self {
+        self.entities = entities;
         self
     }
     /// The same parts keeping the scene's particles when its inputs change, or not.
@@ -723,6 +770,12 @@ pub enum ScenePartsError {
     },
     /// A biome this game doesn't have.
     BadBiome,
+    /// An entity part names an entity the scene doesn't have, or a group `groups`
+    /// doesn't have, or an entity another part already names.
+    BadEntityPart {
+        /// Index in `entities`.
+        index: u32,
+    },
 }
 
 impl From<SceneError> for ScenePartsError {

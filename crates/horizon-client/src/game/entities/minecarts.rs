@@ -2233,51 +2233,100 @@ impl Game<'_> {
                 (c.position.y + 0.35).floor() as i32,
                 c.position.z.floor() as i32,
             );
-            let packed = (u32::from(l >> 4) * 16) | ((u32::from(l & 15) * 16) << 8);
-            if let Some(state) = shown.unwrap_or_else(|| self.display_state(c)) {
-                let display = base
-                    * glam::Mat4::from_scale(glam::Vec3::splat(0.75))
-                    * glam::Mat4::from_translation(glam::Vec3::new(
-                        -0.5,
-                        (display_offset(c) as f32 - 8.0) / 16.0,
-                        0.5,
-                    ))
-                    * glam::Mat4::from_rotation_y(90f32.to_radians());
-                if c.kind == CartKind::Chest {
-                    self.special_block_model(state, display, l, out);
-                } else {
-                    // TNT minecarts flash white as the fuse runs out (TntMinecartRenderer).
-                    let swell = if c.kind == CartKind::Tnt && c.fuse > -1 {
-                        let fuse = c.fuse as f32 - a + 1.0;
-                        if fuse < 10.0 {
-                            let g = (1.0 - fuse / 10.0).clamp(0.0, 1.0);
-                            1.0 + g * g * g * g * 0.3
-                        } else {
-                            1.0
-                        }
+            let shown = shown.unwrap_or_else(|| self.display_state(c));
+            self.cart_body_geometry(c, model, uv, &mut poses, base, shown, a, l, out);
+            self.finish_lit_entity(culling, c, out, entity_start);
+        }
+    }
+    /// A cart standing in a screen's scene, around `camera`: the old renderer's pose with no
+    /// rail under it (on its position, turned by its yaw and pitch, the per-entity jitter
+    /// left out since nothing stacks), full bright, its fuse flash at `partial`.
+    pub(in crate::game) fn scene_cart_geometry(
+        &self,
+        c: &Minecart,
+        partial: f32,
+        camera: glam::DVec3,
+        out: &mut Vec<Vertex>,
+    ) {
+        let Some(model) = self.cart_models.models.get(&c.kind) else {
+            return;
+        };
+        let Some(uv) = self
+            .gui
+            .atlas
+            .sprites
+            .get("entity/minecart/minecart")
+            .map(|r| [r.u0, r.v0, r.u1, r.v1])
+        else {
+            return;
+        };
+        let p = glam::DVec3::new(c.position.x, c.position.y, c.position.z) - camera;
+        let base = glam::Mat4::from_translation(p.as_vec3() + glam::Vec3::new(0.0, 0.375, 0.0))
+            * glam::Mat4::from_rotation_y((180.0 - c.yaw).to_radians())
+            * glam::Mat4::from_rotation_z((-c.pitch).to_radians());
+        let mut poses = Poses::pooled();
+        let shown = self.display_state(c);
+        self.cart_body_geometry(c, model, uv, &mut poses, base, shown, partial, 0xFF, out);
+    }
+    /// A cart's display block and body posed by `base`, its fuse flash at `a` into the
+    /// tick, lit by `light` (sky in the high nibble, block in the low): the drawing half of
+    /// `AbstractMinecartRenderer.submit`, which a screen scene's carts share.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::game) fn cart_body_geometry(
+        &self,
+        c: &Minecart,
+        model: &horizon_client::mobs::Part,
+        uv: [f32; 4],
+        poses: &mut Poses,
+        base: glam::Mat4,
+        shown: Option<BlockStateId>,
+        a: f32,
+        l: u8,
+        out: &mut Vec<Vertex>,
+    ) {
+        let packed = (u32::from(l >> 4) * 16) | ((u32::from(l & 15) * 16) << 8);
+        if let Some(state) = shown {
+            let display = base
+                * glam::Mat4::from_scale(glam::Vec3::splat(0.75))
+                * glam::Mat4::from_translation(glam::Vec3::new(
+                    -0.5,
+                    (display_offset(c) as f32 - 8.0) / 16.0,
+                    0.5,
+                ))
+                * glam::Mat4::from_rotation_y(90f32.to_radians());
+            if c.kind == CartKind::Chest {
+                self.special_block_model(state, display, l, out);
+            } else {
+                // TNT minecarts flash white as the fuse runs out (TntMinecartRenderer).
+                let swell = if c.kind == CartKind::Tnt && c.fuse > -1 {
+                    let fuse = c.fuse as f32 - a + 1.0;
+                    if fuse < 10.0 {
+                        let g = (1.0 - fuse / 10.0).clamp(0.0, 1.0);
+                        1.0 + g * g * g * g * 0.3
                     } else {
                         1.0
-                    };
-                    let m = display
-                        * glam::Mat4::from_translation(glam::Vec3::splat(0.5))
-                        * glam::Mat4::from_scale(glam::Vec3::splat(swell))
-                        * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
-                    let flash = c.kind == CartKind::Tnt && c.fuse > -1 && (c.fuse / 5) % 2 == 0;
-                    let start = out.len();
-                    self.block_model_vertices(state, 0, m, packed, false, out);
-                    if flash {
-                        // submitWhiteSolidBlock: OverlayTexture.u(1.0) on the cart's own light.
-                        for v in &mut out[start..] {
-                            v.layer = 5;
-                        }
+                    }
+                } else {
+                    1.0
+                };
+                let m = display
+                    * glam::Mat4::from_translation(glam::Vec3::splat(0.5))
+                    * glam::Mat4::from_scale(glam::Vec3::splat(swell))
+                    * glam::Mat4::from_translation(glam::Vec3::splat(-0.5));
+                let flash = c.kind == CartKind::Tnt && c.fuse > -1 && (c.fuse / 5) % 2 == 0;
+                let start = out.len();
+                self.block_model_vertices(state, 0, m, packed, false, out);
+                if flash {
+                    // submitWhiteSolidBlock: OverlayTexture.u(1.0) on the cart's own light.
+                    for v in &mut out[start..] {
+                        v.layer = 5;
                     }
                 }
             }
-            let m = base * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
-            poses.reset(model);
-            horizon_client::mobs::render::draw(model, m, &poses, uv, 0xFFFF_FFFF, packed, 0, out);
-            self.finish_lit_entity(culling, c, out, entity_start);
         }
+        let m = base * glam::Mat4::from_scale(glam::Vec3::new(-1.0, -1.0, 1.0));
+        poses.reset(model);
+        horizon_client::mobs::render::draw(model, m, poses, uv, 0xFFFF_FFFF, packed, 0, out);
     }
     /// The model of a block drawn by its block-entity renderer, as a chest
     /// minecart shows its chest and a block display its special block.

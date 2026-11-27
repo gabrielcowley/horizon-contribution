@@ -2,7 +2,7 @@ use super::*;
 use mod_api::BlockMetadata as _;
 use mod_api::{
     BlockState, Compound, DrawContext, EntityRef, GuiEntity, Scene, SceneBlock, SceneClock,
-    SceneDepth, SceneEntity, SceneError, SceneFace, SceneGroup, SceneOverlay, SceneParticle,
+    SceneDepth, SceneEntity, SceneEntityPart, SceneError, SceneFace, SceneGroup, SceneOverlay, SceneParticle,
     SceneParts, ScenePartsError, SceneSection, SceneShading, SceneTexturedQuad, SceneView,
     SceneWithQuadsError,
 };
@@ -87,7 +87,7 @@ const TEXTURED_ANSWERS: [Result<(), SceneWithQuadsError>; 5] = [
     Err(SceneWithQuadsError::Scene(SceneError::TooManyScenes)),
 ];
 
-const PARTS_ANSWERS: [Result<(), ScenePartsError>; 10] = [
+const PARTS_ANSWERS: [Result<(), ScenePartsError>; 11] = [
     Ok(()),
     Err(ScenePartsError::Scene(SceneError::TooManyScenes)),
     Err(ScenePartsError::BadSection { index: 7 }),
@@ -98,10 +98,12 @@ const PARTS_ANSWERS: [Result<(), ScenePartsError>; 10] = [
     Err(ScenePartsError::BadOverlay { index: 2 }),
     Err(ScenePartsError::NoBlock { index: 9 }),
     Err(ScenePartsError::BadBiome),
+    Err(ScenePartsError::BadEntityPart { index: 1 }),
 ];
 
 /// Parts with every field set: a section moved, dimmed and hidden, a face with a tint per
-/// corner, an overlay, Ponder's shading and biome, a sign's saved text and a broken block.
+/// corner, an overlay, Ponder's shading and biome, a sign's saved text, a broken block and an
+/// entity riding the section at an age of its own beside one aged by the clock.
 fn parts(face: SceneTexturedQuad) -> SceneParts {
     let mut front = Compound::new();
     front.insert(
@@ -132,6 +134,10 @@ fn parts(face: SceneTexturedQuad) -> SceneParts {
         .with_game_block_entities(vec![(0, sign)])
         .with_breaking(vec![(1, 6)])
         .keep_particles(true)
+        .with_entities(vec![
+            SceneEntityPart::new(0).in_group(0).aged(37),
+            SceneEntityPart::new(1),
+        ])
 }
 
 /// What a guide page draws: a scene of blocks alone, then a living one with each part (a

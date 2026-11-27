@@ -14,7 +14,7 @@ use horizon_world::registry::BlockStateId;
 use mod_api::{
     Compound, DrawContext as _, GuiEntity, SCENE_CATCH_UP, SCENE_MAX_ANIMATING, SCENE_MAX_ENTITIES,
     SCENE_MAX_PARTICLES, SCENE_MAX_TEXTURED_QUADS, Scene, SceneClock, SceneDepth, SceneEntity,
-    SceneError, SceneFace, SceneGroup, SceneOverlay, SceneParticle, SceneParts, ScenePartsError,
+    SceneEntityPart, SceneError, SceneFace, SceneGroup, SceneOverlay, SceneParticle, SceneParts, ScenePartsError,
     SceneSection, SceneShading, SceneTexturedQuad, SceneView, SceneWithQuadsError,
 };
 
@@ -1281,4 +1281,104 @@ fn game_block_entities_in_a_clocked_scene_move_on_its_tick_not_the_clients() {
         let after = bytemuck::cast_slice::<_, u8>(&drawn(game, &unclocked, &parts)).to_vec();
         assert!(after != before, "no clock: the client's");
     });
+}
+
+/// A dropped item and minecarts of two kinds (`GuiEntity::Kind` beyond living types), each
+/// drawn by the world's route for its kind; an item without its stack is refused as bad data
+/// and a general type no mod declared as unknown.
+#[test]
+#[ignore = "daily"]
+fn items_and_minecarts_stand_in_a_scene_and_what_cant_be_drawn_is_named() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let clock = SceneClock::new(41, 3, 0.0).animate_blocks(false);
+        let scene = |entities| pair(game).with_clock(clock).with_entities(entities);
+        let bare = drawn(game, &pair(game), &SceneParts::new()).len();
+        let mut drawn_alone = Vec::new();
+        for entity in [apple(), thing("minecraft:minecart"), thing("minecraft:chest_minecart")] {
+            let count = drawn(game, &scene(vec![entity]), &SceneParts::new()).len();
+            assert!(count > bare, "{count} > {bare}");
+            drawn_alone.push(count - bare);
+        }
+        assert!(
+            drawn_alone[2] > drawn_alone[1],
+            "the chest minecart draws its chest too"
+        );
+        let refused = |entity| draw_parts(game, &scene(vec![entity]), &SceneParts::new());
+        let (answer, batch) = refused(thing("minecraft:item"));
+        assert_eq!(answer, Err(SceneError::BadData { index: 0 }.into()));
+        assert!(batch.vertices.is_empty());
+        let unknown = GuiEntity::general(mod_api::GeneralRenderState::new(
+            "nobody:crate",
+            [[-0.5, 0.0, -0.5], [0.5, 1.0, 0.5]],
+        ));
+        let (answer, batch) = refused(SceneEntity::new(unknown, [0.5, 1.0, 0.5]));
+        assert_eq!(answer, Err(SceneError::UnknownType { index: 0 }.into()));
+        assert!(batch.vertices.is_empty());
+    });
+}
+
+/// An entity part puts its entity in a group: it moves with the group, is hidden with it and
+/// takes its light. Its own age replaces the clock's (a dropped item turns with its age), and a
+/// part naming no entity or no group is refused before anything is drawn.
+#[test]
+#[ignore = "daily"]
+fn an_entity_rides_its_group_and_ages_as_its_part_says() {
+    crate::game::native_entity_refs::tests::with_client_game(|game| {
+        let clock = SceneClock::new(42, 3, 0.0).animate_blocks(false);
+        let scene = pair(game).with_clock(clock).with_entities(vec![apple()]);
+        let still = group(1, 1, [0.0; 3]);
+        let riding = |g: SceneGroup, part: SceneEntityPart| {
+            drawn(game, &scene, &grouped(&[g]).with_entities(vec![part]))
+        };
+        let part = SceneEntityPart::new(0).in_group(0);
+        let base = riding(still, SceneEntityPart::new(0));
+        let lifted_alone = drawn(game, &scene, &grouped(&[group(1, 1, [0.0, 2.0, 0.0])]));
+        let lifted_with = riding(group(1, 1, [0.0, 2.0, 0.0]), part);
+        let top = |v: &[horizon_client::hud::HudVertex]| {
+            v.iter().map(|v| v.pos[1]).fold(f32::INFINITY, f32::min)
+        };
+        // The lifted block's top is 3 blocks up; the item rides 2 up from above 1.
+        assert!(top(&lifted_with) < top(&lifted_alone), "it rides the group up");
+        let hidden_alone = drawn(game, &scene, &grouped(&[still.drawn(false)]));
+        let hidden_with = riding(still.drawn(false), part);
+        assert!(hidden_with.len() < hidden_alone.len(), "hidden with its group");
+        assert!(
+            brightness(&riding(still.lit(5, 5), part)) < brightness(&riding(still.lit(5, 5), SceneEntityPart::new(0))),
+            "lit by its group"
+        );
+        let aged = |age| riding(still, SceneEntityPart::new(0).aged(age));
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&aged(3)),
+            bytemuck::cast_slice::<_, u8>(&base),
+            "an age of the clock's tick draws as the clock does"
+        );
+        assert_ne!(
+            bytemuck::cast_slice::<_, u8>(&aged(20)),
+            bytemuck::cast_slice::<_, u8>(&base),
+            "another age turns the item"
+        );
+        for (parts, index) in [
+            (vec![SceneEntityPart::new(1)], 0),
+            (vec![SceneEntityPart::new(0), SceneEntityPart::new(0).in_group(1)], 1),
+        ] {
+            let (answer, batch) = draw_parts(game, &scene, &grouped(&[still]).with_entities(parts));
+            assert_eq!(answer, Err(ScenePartsError::BadEntityPart { index }));
+            assert!(batch.vertices.is_empty());
+        }
+    });
+}
+
+/// A scene entity of type `kind` with no data, standing on the first block.
+fn thing(kind: &str) -> SceneEntity {
+    SceneEntity::new(GuiEntity::kind(kind), [0.5, 1.0, 0.5])
+}
+
+/// A dropped apple on the first block.
+fn apple() -> SceneEntity {
+    let mut item = Compound::new();
+    item.insert("id".into(), mod_api::Tag::String("minecraft:apple".into()));
+    item.insert("count".into(), mod_api::Tag::Int(1));
+    let mut data = Compound::new();
+    data.insert("Item".into(), mod_api::Tag::Compound(item));
+    SceneEntity::new(GuiEntity::with_data("minecraft:item", data), [0.5, 1.0, 0.5])
 }

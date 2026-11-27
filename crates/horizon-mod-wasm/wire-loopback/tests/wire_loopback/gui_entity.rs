@@ -1,7 +1,7 @@
 use super::*;
 use mod_api::{
-    Compound, DrawContext, EntityRef, GuiEntity, GuiEntityError, GuiEntityLook, GuiEntityView, Tag,
-    WorldEpoch,
+    Compound, DrawContext, EntityRef, GeneralRenderState, GuiEntity, GuiEntityError, GuiEntityLook,
+    GuiEntityView, Tag, WorldEpoch,
 };
 
 /// A screen's drawing that keeps each entity it is asked to draw, refusing a handle of id 0.
@@ -18,12 +18,27 @@ impl DrawContext for Draw {
 }
 
 /// What a data model's screen draws: a baby zombie turned toward the cursor, a spinning
-/// golem of a mod's, an entity of the level, and one whose handle is refused.
+/// golem of a mod's, a dropped apple, a mod's general crate with its box and a synced value,
+/// an entity of the level, and one whose handle is refused.
 fn asks() -> Vec<(GuiEntity, GuiEntityView, Result<(), GuiEntityError>)> {
     let mut data = Compound::new();
     data.insert("IsBaby".into(), Tag::Byte(1));
     data.insert("CustomName".into(), Tag::String("\"Bob\"".into()));
     let rect = [26.0, 18.0, 78.0, 70.0];
+    let mut item = Compound::new();
+    item.insert("id".into(), Tag::String("minecraft:apple".into()));
+    item.insert("count".into(), Tag::Int(3));
+    let mut apple = Compound::new();
+    apple.insert("Item".into(), Tag::Compound(item));
+    let mut count = Compound::new();
+    count.insert("n".into(), Tag::Int(11));
+    let mut wire_test = Compound::new();
+    wire_test.insert("count".into(), Tag::Compound(count));
+    let mut crate_state =
+        GeneralRenderState::new("wire_test:crate", [[-1.0, 0.0, -1.0], [1.0, 1.5, 1.0]]);
+    crate_state
+        .attachments
+        .insert("wire_test".into(), Tag::Compound(wire_test));
     let epoch = WorldEpoch::new(3);
     vec![
         (
@@ -42,6 +57,16 @@ fn asks() -> Vec<(GuiEntity, GuiEntityView, Result<(), GuiEntityError>)> {
                     pitch: -10.0,
                 },
             ),
+            Ok(()),
+        ),
+        (
+            GuiEntity::with_data("minecraft:item", apple),
+            GuiEntityView::new(rect, 40.0, 0.0, GuiEntityLook::At([1.0, 2.0])),
+            Ok(()),
+        ),
+        (
+            GuiEntity::general(crate_state),
+            GuiEntityView::new(rect, 20.0, 0.5, GuiEntityLook::At([3.0, 4.0])),
             Ok(()),
         ),
         (

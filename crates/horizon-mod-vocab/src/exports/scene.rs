@@ -3,7 +3,7 @@ pub use client::scene::{
     SCENE_MAX_OVERLAYS, SCENE_MAX_PARTICLES, SCENE_MAX_TEXTURED_QUADS,
 };
 pub use client::scene::{
-    SCENE_FULL_BRIGHT, SceneFace, SceneGroup, SceneParts, ScenePartsError, SceneShading,
+    SCENE_FULL_BRIGHT, SceneEntityPart, SceneFace, SceneGroup, SceneParts, ScenePartsError, SceneShading,
 };
 pub use client::scene::{
     Scene, SceneBlock, SceneBlockEntity, SceneClock, SceneDepth, SceneEntity, SceneError,

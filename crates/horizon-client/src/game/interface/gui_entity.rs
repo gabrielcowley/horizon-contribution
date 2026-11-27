@@ -1,4 +1,4 @@
-//! A living entity drawn in a mod's screen (`DrawContext::entity`): vanilla's
+//! An entity drawn in a mod's screen (`DrawContext::entity`): vanilla's
 //! `InventoryScreen.renderEntityInInventoryFollowsMouse` and
 //! `renderEntityInInventory`. The entity is drawn by the same route the world
 //! draws it with (a mod's renderer for its type, else its model, then the
@@ -6,6 +6,9 @@
 //! the box's centre, `size` pixels a block, turned, depth-sorted, back faces
 //! culled where the model's render type culls them (as in the world) and lit by
 //! `Lighting.ENTITY_IN_UI`.
+//!
+//! Besides living entities, a dropped item, a minecart and a mod's general type are
+//! drawn the same way, each by the route the world draws it with (`Prepared`).
 //!
 //! Nothing here runs unless a mod calls `DrawContext::entity`. The buffers and
 //! the entities made for `GuiEntity::Kind` are kept per thread and reused, so a
@@ -18,7 +21,7 @@ use horizon_core::{
     geometry::Vec3 as Position,
     nbt::{Compound, JavaString, Tag},
 };
-use mod_api::{GuiEntity, GuiEntityError, GuiEntityLook, GuiEntityView};
+use mod_api::{GeneralRenderState, GuiEntity, GuiEntityError, GuiEntityLook, GuiEntityView};
 use std::{cell::RefCell, sync::Arc};
 
 /// How many entities made for `GuiEntity::Kind` are kept: a mob page shows a
@@ -29,7 +32,94 @@ const KEPT: usize = 8;
 struct Made {
     kind: String,
     data: Compound,
-    mob: Mob,
+    made: Prepared,
+}
+
+/// An entity prepared for drawing in a screen or a screen's scene, by the route the world
+/// draws its kind with. Made for drawing only: none of them joins a level.
+pub(in crate::game) enum Prepared {
+    /// A living entity, drawn by its model (or a mod's renderer) and the mods' layers.
+    Living(Mob),
+    /// A dropped item (`minecraft:item`), drawn by `ItemEntityRenderer`.
+    Item(horizon_client::entities::ItemEntity),
+    /// A minecart of any kind, drawn by `AbstractMinecartRenderer`.
+    Cart(Box<super::minecarts::Minecart>),
+    /// A mod's general type, drawn by the renderer its type registered.
+    General(GeneralDrawn),
+}
+
+/// A general entity drawn from data: its frame's own values and where it stands.
+pub(in crate::game) struct GeneralDrawn {
+    state: GeneralRenderState,
+    position: [f64; 3],
+    yaw: f32,
+    pitch: f32,
+    age: u32,
+}
+
+impl Prepared {
+    /// Stands it at `position`, turned (body yaw, head yaw, head pitch, degrees), `age`
+    /// ticks old: what a scene does to its entities each frame. Nothing ticks it.
+    pub(in crate::game) fn place(
+        &mut self,
+        position: [f64; 3],
+        (yaw, head_yaw, head_pitch): (f32, f32, f32),
+        age: u32,
+    ) {
+        let [x, y, z] = position;
+        match self {
+            Self::Living(mob) => {
+                mob.position = Position::new(x, y, z);
+                mob.previous = mob.position;
+                (mob.yaw, mob.previous_yaw) = (yaw, yaw);
+                (mob.body_yaw, mob.previous_body_yaw) = (yaw, yaw);
+                (mob.head_yaw, mob.previous_head_yaw) = (head_yaw, head_yaw);
+                (mob.head_pitch, mob.previous_head_pitch) = (head_pitch, head_pitch);
+                mob.age = age;
+            }
+            Self::Item(item) => {
+                item.position = Position::new(x, y, z);
+                item.previous = item.position;
+                item.age = i32::try_from(age).unwrap_or(i32::MAX);
+            }
+            Self::Cart(cart) => {
+                cart.position = Position::new(x, y, z);
+                cart.previous = cart.position;
+                (cart.yaw, cart.previous_yaw) = (yaw, yaw);
+                (cart.pitch, cart.previous_pitch) = (head_pitch, head_pitch);
+            }
+            Self::General(general) => {
+                general.position = position;
+                (general.yaw, general.pitch, general.age) = (yaw, head_pitch, age);
+            }
+        }
+    }
+
+    /// Its feet.
+    fn position(&self) -> DVec3 {
+        let at = |p: Position| DVec3::new(p.x, p.y, p.z);
+        match self {
+            Self::Living(mob) => at(mob.position),
+            Self::Item(item) => at(item.position),
+            Self::Cart(cart) => at(cart.position),
+            Self::General(general) => DVec3::from_array(general.position),
+        }
+    }
+
+    /// How tall it stands, for a screen's box: its type's height, or its own box's.
+    fn height(&self) -> f32 {
+        match self {
+            Self::Living(mob) => mob.height(),
+            // `EntityType.ITEM`'s 0.25 box.
+            Self::Item(_) => 0.25,
+            // `EntityType.MINECART`'s 0.7 high box.
+            Self::Cart(_) => 0.7,
+            Self::General(general) => {
+                let [lo, hi] = general.state.local_box;
+                (hi[1] - lo[1]) as f32
+            }
+        }
+    }
 }
 
 /// A face of the entity as seen: its depth, corners, UVs, ABGR colour and its
@@ -67,8 +157,20 @@ fn turn(look: GuiEntityLook, centre: [f32; 2]) -> (f32, f32, f32, f32) {
     }
 }
 
+/// `entity` posed still for the screen with the turn `turn` gives it: a living entity's
+/// body and head; anything else turned by the body's yaw.
+fn pose(entity: &mut Prepared, turned: (f32, f32, f32, f32)) {
+    let (body, _, _, _) = turned;
+    match entity {
+        Prepared::Living(mob) => pose_mob(mob, turned),
+        Prepared::Item(_) => {}
+        Prepared::Cart(cart) => (cart.yaw, cart.previous_yaw) = (body, body),
+        Prepared::General(general) => general.yaw = body,
+    }
+}
+
 /// `mob` posed still for the screen with the turn `turn` gives it.
-fn pose(mob: &mut Mob, (body, head, pitch, _): (f32, f32, f32, f32)) {
+fn pose_mob(mob: &mut Mob, (body, head, pitch, _): (f32, f32, f32, f32)) {
     mob.previous = mob.position;
     mob.body_yaw = body;
     mob.previous_body_yaw = body;
@@ -115,23 +217,21 @@ impl Game<'_> {
             return Err(GuiEntityError::BadView);
         }
         let turned = turn(view.look, centre);
-        let mut existing;
-        let mob: &mut Mob = match entity {
+        let mut owned;
+        let prepared: &mut Prepared = match entity {
             GuiEntity::Kind { kind, data } => {
                 let at = self.made_entity(&mut scratch.made, kind, data)?;
-                &mut scratch.made[at].mob
+                &mut scratch.made[at].made
             }
-            GuiEntity::Existing(handle) => {
-                existing = self.existing_gui_entity(*handle)?;
-                &mut existing
+            other => {
+                owned = self.prepare_gui_entity(other)?;
+                &mut owned
             }
-            // An entity a later API adds is one this game can't name.
-            _ => return Err(GuiEntityError::UnknownType),
         };
-        pose(mob, turned);
+        pose(prepared, turned);
         scratch.verts.clear();
-        self.gui_entity_geometry(mob, &mut scratch.verts);
-        let height = mob.height();
+        self.prepared_geometry_at(prepared, 1.0, prepared.position(), &mut scratch.verts);
+        let height = prepared.height();
         // PictureInPictureRenderer: the box centre, (size, size, -size); then
         // the translation and Rz(pi) * Rx(the look's pitch).
         let gui = Mat4::from_translation(Vec3::new(centre[0], centre[1], 0.0))
@@ -164,34 +264,55 @@ impl Game<'_> {
         kind: &str,
         data: &Compound,
     ) -> Result<usize, GuiEntityError> {
-        let types = self.res.mob_types();
-        let ty = types.get(kind).ok_or(GuiEntityError::UnknownType)?;
-        let same = |m: &Made| m.kind == kind && m.data == *data && Arc::ptr_eq(&m.mob.kind, ty);
+        let ty = self.res.mob_types().get(kind);
+        // A living one made before a resource reload replaced its type is made again.
+        let current = |m: &Prepared| match (m, ty) {
+            (Prepared::Living(mob), Some(ty)) => Arc::ptr_eq(&mob.kind, ty),
+            (Prepared::Living(_), None) => false,
+            _ => true,
+        };
+        let same = |m: &Made| m.kind == kind && m.data == *data && current(&m.made);
         if let Some(at) = made.iter().position(same) {
             return Ok(at);
         }
-        let mob = self.new_gui_entity(kind, data)?;
+        let entity = self.new_gui_entity(kind, data)?;
         if made.len() == KEPT {
             made.remove(0);
         }
         made.push(Made {
             kind: kind.into(),
             data: data.clone(),
-            mob,
+            made: entity,
         });
         Ok(made.len() - 1)
     }
 
     /// `entity` prepared for drawing, as `DrawContext::entity` prepares it (a screen scene's
-    /// entities too): a new entity of a type made for drawing only, or a copy of the
-    /// client's entity as it is this frame. Refused by the same named causes.
+    /// entities too): a new entity of a type made for drawing only, a copy of the client's
+    /// entity as it is this frame, or a general type's frame. Refused by the same named
+    /// causes.
     pub(in crate::game) fn prepare_gui_entity(
         &self,
         entity: &GuiEntity,
-    ) -> Result<Mob, GuiEntityError> {
+    ) -> Result<Prepared, GuiEntityError> {
         match entity {
             GuiEntity::Kind { kind, data } => self.new_gui_entity(kind, data),
-            GuiEntity::Existing(handle) => self.existing_gui_entity(*handle),
+            GuiEntity::Existing(handle) => self.existing_gui_entity(*handle).map(Prepared::Living),
+            GuiEntity::General(state) => {
+                if super::general::general_type_catalog()
+                    .slot(&state.type_key)
+                    .is_none()
+                {
+                    return Err(GuiEntityError::UnknownType);
+                }
+                Ok(Prepared::General(GeneralDrawn {
+                    state: state.clone(),
+                    position: [0.0; 3],
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    age: 0,
+                }))
+            }
             // An entity a later API adds is one this game can't name.
             _ => Err(GuiEntityError::UnknownType),
         }
@@ -208,11 +329,14 @@ impl Game<'_> {
         Ok(found.ok_or(GuiEntityError::NoEntity)?.clone())
     }
 
-    /// A new entity of living type `kind` loaded from `data`, made for drawing only.
-    fn new_gui_entity(&self, kind: &str, data: &Compound) -> Result<Mob, GuiEntityError> {
+    /// A new entity of type `kind` loaded from `data`, made for drawing only: a living type,
+    /// a dropped item or a minecart.
+    fn new_gui_entity(&self, kind: &str, data: &Compound) -> Result<Prepared, GuiEntityError> {
         let types = self.res.mob_types();
-        let ty = types.get(kind).ok_or(GuiEntityError::UnknownType)?;
-        Ok(if data.is_empty() {
+        let Some(ty) = types.get(kind) else {
+            return self.new_gui_thing(kind, data);
+        };
+        Ok(Prepared::Living(if data.is_empty() {
             // Built for drawing only, as a client's copy of a server's mob: no mod part's
             // `register_goals` or behaviour registration runs for a screen's entity.
             Mob::new_remote(u32::MAX, ty.clone(), Position::ZERO, 0.0)
@@ -235,19 +359,83 @@ impl Game<'_> {
             )
             .filter(|m| Arc::ptr_eq(&m.kind, ty))
             .ok_or(GuiEntityError::BadData)?
-        })
+        }))
     }
 
-    /// `mob`'s geometry around its feet, as the world draws it: a mod's
-    /// renderer for its type in place of its model, else the model; then the
-    /// mods' layers. Full bright, seen from its own position.
-    pub(in crate::game) fn gui_entity_geometry(&self, mob: &Mob, out: &mut Vec<Vertex>) {
-        let p = mob.position;
-        self.gui_entity_geometry_at(mob, 1.0, DVec3::new(p.x, p.y, p.z), out);
+    /// A new dropped item or minecart of type `kind` loaded from `data`, as `Entity.load`
+    /// reads it at the origin. An item needs its `Item`.
+    fn new_gui_thing(&self, kind: &str, data: &Compound) -> Result<Prepared, GuiEntityError> {
+        let cart = super::minecarts::CartKind::from_id(kind);
+        if kind != "minecraft:item" && cart.is_none() {
+            return Err(GuiEntityError::UnknownType);
+        }
+        let named = JavaString::from(kind);
+        if data
+            .get(&JavaString::from("id"))
+            .is_some_and(|id| !matches!(id, Tag::String(s) if *s == named))
+        {
+            return Err(GuiEntityError::BadData);
+        }
+        let mut tag = data.clone();
+        tag.insert("id".into(), Tag::String(named));
+        let origin = Tag::List(vec![Tag::Double(0f64.to_bits()); 3]);
+        tag.insert("Pos".into(), origin);
+        let tag = Tag::Compound(tag);
+        match cart {
+            Some(cart) => super::minecarts::Minecart::from_nbt(&tag, u32::MAX, cart)
+                .map(|c| Prepared::Cart(Box::new(c))),
+            // A fixed bob phase: the same data draws the same every time.
+            None => horizon_client::entity_nbt::item_entity_from_nbt(&tag, u32::MAX, 0.0)
+                .map(Prepared::Item),
+        }
+        .ok_or(GuiEntityError::BadData)
     }
 
-    /// `gui_entity_geometry` at `partial` into the tick, around `camera`: what a screen
-    /// scene's entities submit, in the scene's own coordinates.
+    /// `entity`'s geometry at `partial` into the tick, around `camera`, as the world draws
+    /// it, full bright.
+    pub(in crate::game) fn prepared_geometry_at(
+        &self,
+        entity: &Prepared,
+        partial: f32,
+        camera: DVec3,
+        out: &mut Vec<Vertex>,
+    ) {
+        match entity {
+            Prepared::Living(mob) => self.gui_entity_geometry_at(mob, partial, camera, out),
+            Prepared::Item(item) => self.scene_item_geometry(item, partial, camera, out),
+            Prepared::Cart(cart) => self.scene_cart_geometry(cart, partial, camera, out),
+            Prepared::General(general) => {
+                let catalog = super::general::general_type_catalog();
+                let Some((resolved, _)) = catalog
+                    .slot(&general.state.type_key)
+                    .and_then(crate::game::native_entity_renderers::general_renderer)
+                else {
+                    return;
+                };
+                let state = mod_api::EntityRenderState::of_general(
+                    0,
+                    partial,
+                    general.age as f32 + partial,
+                    general.yaw,
+                    general.pitch,
+                    general.state.clone(),
+                );
+                let at = DVec3::from_array(general.position);
+                self.mod_entity_renderer_geometry(
+                    &resolved,
+                    &state,
+                    at - camera,
+                    general.position.map(|v| v.floor() as i32),
+                    FULL_BRIGHT,
+                    out,
+                );
+            }
+        }
+    }
+
+    /// `mob`'s geometry at `partial` into the tick, around `camera`, as the world draws it:
+    /// a mod's renderer for its type in place of its model, else the model; then the mods'
+    /// layers. Full bright.
     pub(in crate::game) fn gui_entity_geometry_at(
         &self,
         mob: &Mob,
