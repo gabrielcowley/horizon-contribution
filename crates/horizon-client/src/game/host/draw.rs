@@ -365,6 +365,9 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_> {
     fn set_glint(&mut self, glint: bool) {
         self.game.native_draw_set_glint(&mut *self.surface, glint)
     }
+    fn set_color(&mut self, argb: u32) {
+        self.game.native_draw_set_color(&mut *self.surface, argb)
+    }
     fn quad(&mut self, sprite: &str, corners: [[f32; 3]; 4], uv: [f32; 4], tint: u32) -> bool {
         self.game
             .native_draw_quad(&mut *self.surface, sprite, corners, uv, tint)

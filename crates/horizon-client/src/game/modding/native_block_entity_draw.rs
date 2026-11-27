@@ -234,6 +234,8 @@ pub struct BlockEntityDraw {
     /// in the vertex stream those paths and their spans already cover.
     prepared: bool,
     records: Vec<PreparedRecord>,
+    /// What is drawn is multiplied by this `0xAARRGGBB` (`native_draw_set_color`); white for none.
+    color: u32,
     /// What is drawn shows the enchanted armour glint (`native_draw_set_glint`).
     glint: bool,
 }
@@ -376,6 +378,7 @@ impl BlockEntityDraw {
             spins: Vec::new(),
             prepared: false,
             records: Vec::new(),
+            color: u32::MAX,
             glint: false,
         }
     }
@@ -395,10 +398,11 @@ impl BlockEntityDraw {
         self.spins.last().is_some_and(|(_, spin)| spin.is_some())
     }
 
-    /// Record a prepared copy at the current vertex, unless this draw is CPU-only, spinning or
-    /// glinting (the glint is the CPU vertices' own).
+    /// Record a prepared copy at the current vertex, unless this draw is CPU-only, spinning,
+    /// glinting or coloured (the glint and the colour are the CPU vertices' own: a copy's tint
+    /// reaches only faces with a tint index).
     fn defer_model(&mut self, slot: u32, generation: u64, tint: u32) -> bool {
-        if !self.prepared || self.spinning() || self.glint {
+        if !self.prepared || self.spinning() || self.glint || self.color != u32::MAX {
             return false;
         }
         self.records.push(PreparedRecord {
@@ -578,6 +582,23 @@ impl BlockEntityDraw {
             v.layer = (v.layer & !0xFFFF) | horizon_client::mobs::render::ARMOR_GLINT;
             v.glint_uv = v.uv;
         }
+    }
+    /// The vertices from `start` on are multiplied by the draw's colour
+    /// (`native_draw_set_color`), alpha included, on top of their own shade and tints, as
+    /// `VertexConsumer.setColor` multiplies a `BakedQuad`'s already tinted colour.
+    fn color_from(&mut self, start: usize) {
+        if self.color == u32::MAX {
+            return;
+        }
+        let color = horizon_client::hud_layout::abgr(self.color);
+        for v in self.vertices.iter_mut().skip(start) {
+            v.color = horizon_client::hud_layout::multiply(v.color, color);
+        }
+    }
+    /// What is drawn from `start` on takes the draw's colour and glint.
+    fn finish_from(&mut self, start: usize) {
+        self.color_from(start);
+        self.glint_from(start);
     }
     /// A quad of `corners` (blocks, under the pose) with unit UVs, shaded as
     /// vanilla's block entity models are (`Lighting`'s two lights).
@@ -805,6 +826,7 @@ impl Game<'_> {
                 self.standalone_geometry.generation(),
             ),
             records: Vec::new(),
+            color: u32::MAX,
             glint: false,
         };
         let now = self.world.game_time;
@@ -870,6 +892,7 @@ impl Game<'_> {
             draw.kept = false;
             draw.spins.clear();
             draw.records.clear();
+            draw.color = u32::MAX;
             draw.glint = false;
             self.api_block_entity_submit(pos, block, id, entity, &mut draw);
             self.finish_prepared_draw(&mut draw, corner, camera);
@@ -1031,6 +1054,14 @@ impl Game<'_> {
     pub(super) fn native_draw_set_glint(&self, draw: &mut BlockEntityDraw, glint: bool) {
         draw.glint = glint;
     }
+    /// Every vertex of what is drawn next is multiplied by `argb` (`0xAARRGGBB`, `0xFFFFFFFF`
+    /// for none), alpha included, on top of its own tints, until `native_draw_set_color` is
+    /// called again (`VertexConsumer.setColor` on a whole part): quads, boxes, blocks, models
+    /// and model parts, not items, text, terrain models or fluids. It holds through `push`
+    /// and `pop`, turns with `spin` and is kept with `keep`; each submit starts white.
+    pub(super) fn native_draw_set_color(&self, draw: &mut BlockEntityDraw, argb: u32) {
+        draw.color = argb;
+    }
     /// Draws a quad with `corners` in blocks under `draw`'s pose, in a model
     /// face's order (top left, bottom left, bottom right, top right as seen
     /// from its front), textured with the `uv` rectangle (u0, v0, u1, v1 in
@@ -1056,7 +1087,7 @@ impl Game<'_> {
             rect,
             tint,
         );
-        draw.glint_from(start);
+        draw.finish_from(start);
         true
     }
 
@@ -1178,7 +1209,7 @@ impl Game<'_> {
                 draw.quad(quad.positions, quad.uv, rect, tint);
             }
         }
-        draw.glint_from(start);
+        draw.finish_from(start);
         all
     }
 
@@ -1214,7 +1245,7 @@ impl Game<'_> {
         let pose = draw.pose();
         let start = draw.vertices.len();
         self.block_model_vertices(id, 42, pose, draw.light, true, &mut draw.vertices);
-        draw.glint_from(start);
+        draw.finish_from(start);
         true
     }
 
@@ -1260,7 +1291,7 @@ impl Game<'_> {
             &mut draw.vertices,
         );
         super::minecarts::scale_tint_alpha(&mut draw.vertices[start..], faces, tint);
-        draw.glint_from(start);
+        draw.finish_from(start);
         Ok(())
     }
 
@@ -1288,7 +1319,7 @@ impl Game<'_> {
         };
         let start = draw.vertices.len();
         draw_model_part(draw, part, rect, tint);
-        draw.glint_from(start);
+        draw.finish_from(start);
         true
     }
 
@@ -1425,6 +1456,7 @@ mod tests {
             spins: Vec::new(),
             prepared: false,
             records: Vec::new(),
+            color: u32::MAX,
             glint: false,
         }
     }
@@ -1519,6 +1551,114 @@ mod tests {
             !draw.defer_model(0, 1, u32::MAX),
             "a glinting one is drawn on the CPU"
         );
+    }
+
+    /// `set_color` multiplies every vertex drawn after it, alpha included, on top of its own
+    /// tint: a model's tinted face and its untinted one alike, worked out by hand from the
+    /// vertex bytes (`0xAABBGGRR`, each channel `a * b / 255`). What came before keeps its
+    /// colour, `pop` leaves the colour set, and a coloured model stays off the prepared path,
+    /// whose copies tint only faces with a tint index.
+    #[test]
+    fn set_color_multiplies_tinted_and_untinted_faces_alike() {
+        use super::super::minecarts::{PreparedModelFace, emit_model_faces};
+        let mut quad = bake_flat_face(
+            [0.0; 3],
+            [16.0; 3],
+            [0.0, 0.0, 16.0, 16.0],
+            Direction::Up,
+            Material {
+                sprite: String::new(),
+                force_translucent: false,
+            },
+            0,
+        )
+        .unwrap();
+        let tinted = PreparedModelFace::new(&quad, sprite());
+        quad.tint_index = -1;
+        let plain = PreparedModelFace::new(&quad, sprite());
+        let model = |draw: &mut BlockEntityDraw| {
+            let start = draw.vertices.len();
+            emit_model_faces(
+                [(tinted, 0xF0F0), (plain, 0xF0F0)],
+                draw.pose(),
+                true,
+                |index| (index >= 0).then_some(0x123456),
+                &mut draw.vertices,
+            );
+            draw.finish_from(start);
+        };
+        let mut draw = draw();
+        model(&mut draw);
+        draw.push();
+        draw.color = 0x80FF_8040;
+        draw.pop();
+        model(&mut draw);
+        let colors: Vec<u32> = draw.vertices.iter().map(|v| v.color).collect();
+        // Without: the tint 0x123456 on the tinted face, white on the other.
+        assert!(colors[..4].iter().all(|&c| c == 0xFF56_3412));
+        assert!(colors[4..8].iter().all(|&c| c == u32::MAX));
+        // With 0x80FF8040: alpha 0x80, red 0x12 * 255, green 0x34 * 128, blue 0x56 * 64.
+        assert!(
+            colors[8..12].iter().all(|&c| c == 0x8015_1A12),
+            "{colors:x?}"
+        );
+        assert!(
+            colors[12..].iter().all(|&c| c == 0x8040_80FF),
+            "{colors:x?}"
+        );
+
+        draw.prepared = true;
+        assert!(
+            !draw.defer_model(0, 1, u32::MAX),
+            "a coloured model is drawn on the CPU"
+        );
+        draw.color = u32::MAX;
+        assert!(draw.defer_model(0, 1, u32::MAX), "a white one is prepared");
+    }
+
+    /// A coloured part that turns and is kept is drawn again, turned, in the colour it was
+    /// drawn with, while the colour moves on for what is drawn after it.
+    #[test]
+    fn a_kept_spinning_part_keeps_its_colour() {
+        let mut draw = draw();
+        let corners = [
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ];
+        draw.color = 0xFF00_FF00;
+        draw.spin([0.0, 1.0, 0.0], [0.5; 3], 9.0, 0.0);
+        draw.quad(corners, [[0.0; 2]; 4], sprite(), 0xFFFFFF);
+        draw.finish_from(0);
+        draw.color = u32::MAX;
+        draw.still();
+        draw.keep();
+        assert!(draw.kept);
+        // A spinning quad is unshaded (white); green leaves only its green channel.
+        assert!(draw.vertices.iter().all(|v| v.color == 0xFF00_FF00));
+
+        let entity = ModBlockEntity::new("mymod:shaft".into(), ModBlockEntityFields::default());
+        let mut kept = KeptGeometry::default();
+        let (vertices, turning) = draw.into_turning();
+        kept.keep(
+            [0; 3],
+            KEY,
+            entity.revision(),
+            DEFAULT_BOUNDS,
+            &vertices,
+            turning.clone(),
+            0,
+        );
+        let entry = kept.get([0; 3], KEY, entity.revision(), 50).expect("kept");
+        let mut out = Vec::new();
+        place_turning(&entry.vertices, &turning, 7.5, Vec3::ZERO, &mut out);
+        assert_eq!(out.len(), 4);
+        assert!(
+            out.iter().zip(&vertices).any(|(a, b)| a.pos != b.pos),
+            "it turned"
+        );
+        assert!(out.iter().all(|v| v.color == 0xFF00_FF00));
     }
 
     #[test]

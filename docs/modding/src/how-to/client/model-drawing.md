@@ -321,6 +321,29 @@ holds that clock; `/tick freeze` holds the level partial at 1 and stops texture 
 Camera motion during a freeze does not spin a part backwards. Server time updates do
 not reset animation. Held-arm, hand, mob and scene draws use this same level partial.
 
+## Colouring a whole part
+
+`draw.set_color(argb)` multiplies every vertex drawn after it by `0xAARRGGBB`, alpha
+included, on top of the vertex's own colour: a `tint` argument, a model's tint indices
+and the directional shade alike. It is vanilla's `VertexConsumer.setColor` on a whole
+part, for a machine whose moving parts turn red while it is overloaded:
+
+```rust
+draw.set_color(0xFF_FF4040);
+draw.spin([0.0, 1.0, 0.0], [0.5; 3], speed, phase);
+draw.model(shaft, 0xFFFF_FFFF)?;
+draw.still();
+draw.set_color(0xFFFF_FFFF);
+```
+
+- `0xFFFFFFFF` is no colour, and every `block_entity_submit` (or mob or player draw) starts
+  with it.
+- It covers quads, boxes, blocks, models and model parts. Items, text, terrain models and
+  fluids keep their own colours.
+- It is not part of the pose: `pop` leaves it as it is. A `spin` part turns in its colour,
+  and `keep` keeps each part in the colour it was drawn with.
+- A coloured model is drawn on the CPU rather than as a prepared copy.
+
 ## Copycat faces
 
 Ask `block_sprites` for the material's side faces, then use each face's `texture` and

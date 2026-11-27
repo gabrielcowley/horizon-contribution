@@ -394,6 +394,17 @@ pub trait BlockEntityDrawContext {
     fn set_glint(&mut self, glint: bool) {
         unimplemented!("BlockEntityDrawContext::draw_set_glint")
     }
+    /// Every vertex of what is drawn next is multiplied by `argb` (`0xAARRGGBB`; `0xFFFFFFFF`,
+    /// the start of each call, for none), alpha included, on top of its own tints (a `tint`
+    /// argument, a model's tint indices), until `set_color` is called again: vanilla's
+    /// `VertexConsumer.setColor` on a whole part, to tint a machine's moving part red while it
+    /// is overloaded. It covers quads, boxes, blocks, models and model parts; items, text,
+    /// terrain models and fluids keep their own colours. It is not part of the pose: `pop`
+    /// leaves it as it is. A `spin` part turns with its colour, and what `keep` keeps is kept
+    /// in the colour it was drawn with.
+    fn set_color(&mut self, argb: u32) {
+        unimplemented!("BlockEntityDrawContext::draw_set_color")
+    }
     /// Draws a quad with `corners` in blocks under `draw`'s pose, in a model
     /// face's order (top left, bottom left, bottom right, top right as seen
     /// from its front), textured with the `uv` rectangle (u0, v0, u1, v1 in
