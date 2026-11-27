@@ -278,6 +278,9 @@ impl<'r> FeatureBlockBindings<'r> {
     }
 }
 impl super::block_predicate::PredicateBlockResolver for FeatureBlockBindings<'_> {
+    fn feature_bindings(&self) -> Option<&FeatureBlockBindings<'_>> {
+        Some(self)
+    }
     fn predicate_state(&self, json: &str) -> Result<BlockStateId, DecodeError> {
         self.codec
             .decode(json, false)

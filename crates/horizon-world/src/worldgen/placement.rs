@@ -57,6 +57,9 @@ pub enum PlacementModifier {
     RandomChance(f32),
     Fixed(Vec<[i32; 3]>),
     RandomlySelected(Vec<Self>),
+    /// A mod's placement-modifier type (`Registrar::register_placement_modifier_type`), which
+    /// decoded its own settings.
+    Mod(super::mod_placement::ModPlacement),
 }
 #[derive(Debug)]
 pub enum PlacementError<E> {
@@ -272,6 +275,18 @@ impl PlacementModifier {
                         .map(|v| Self::decode_with_blocks(v.get(), depth + 1, remaining, blocks))
                         .collect::<Result<_, _>>()?,
                 ))
+            }
+            kind if super::mod_placement::ModPlacement::is_mod_type(kind) => {
+                super::mod_placement::ModPlacement::decode(
+                    kind,
+                    json,
+                    blocks
+                        .and_then(|b| b.feature_bindings())
+                        .ok_or(DecodeError::Field("mod placement modifier bindings"))?,
+                    depth,
+                    remaining,
+                )
+                .map(Self::Mod)
             }
             _ => Err(DecodeError::Field("placement modifier type")),
         }
@@ -499,6 +514,7 @@ impl PlacementModifier {
                 let index = random.next_int_bound(placements.len() as i32)? as usize;
                 placements[index].modify_inner(context, random, position, emit, remaining)?;
             }
+            Self::Mod(modifier) => modifier.modify(context, random, position, emit)?,
         }
         Ok(())
     }

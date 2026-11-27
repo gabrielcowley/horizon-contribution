@@ -150,12 +150,12 @@ impl std::fmt::Debug for ModFeature {
     }
 }
 
-/// The engine's decoders over the feature's block bindings.
-struct Parts<'b, 'r> {
-    bindings: &'b FeatureBlockBindings<'r>,
-    depth: usize,
-    remaining: &'b mut usize,
-    rules: Vec<RuleTest>,
+/// The engine's decoders over the feature's block bindings (a placement modifier's too).
+pub(super) struct Parts<'b, 'r> {
+    pub(super) bindings: &'b FeatureBlockBindings<'r>,
+    pub(super) depth: usize,
+    pub(super) remaining: &'b mut usize,
+    pub(super) rules: Vec<RuleTest>,
 }
 impl ModFeatureParts for Parts<'_, '_> {
     fn registry(&self) -> &BlockRegistry {
@@ -269,10 +269,10 @@ impl ModFeature {
     }
 }
 
-/// The caller's random as a mod's feature draws from it.
-struct Draws<'a, R> {
-    random: &'a mut R,
-    invalid: Option<InvalidBound>,
+/// The caller's random as a mod's feature (or placement modifier) draws from it.
+pub(super) struct Draws<'a, R> {
+    pub(super) random: &'a mut R,
+    pub(super) invalid: Option<InvalidBound>,
 }
 impl<R: RandomSource> ModFeatureRandom for Draws<'_, R> {
     fn int(&mut self, bound: i32) -> i32 {

@@ -51,6 +51,11 @@ pub trait PredicateBlockResolver {
         Err(DecodeError::Field("predicate fluid registry"))
     }
     fn predicate_block_set(&self, json: &str) -> Result<Arc<BTreeSet<BlockStateId>>, DecodeError>;
+    /// The feature bindings behind this resolver, for a mod's placement modifier to decode the
+    /// vanilla values its settings embed; `None` where there are none.
+    fn feature_bindings(&self) -> Option<&super::block_feature::FeatureBlockBindings<'_>> {
+        None
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -57,6 +57,7 @@ pub mod mod_biome_sources;
 pub mod mod_density_functions;
 pub mod mod_features;
 pub mod mod_generators;
+pub mod mod_placement;
 pub mod ore_feature;
 pub mod overrides;
 pub mod placement;
