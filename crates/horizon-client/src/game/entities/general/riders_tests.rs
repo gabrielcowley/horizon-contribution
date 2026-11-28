@@ -223,7 +223,8 @@ fn a_vehicle_without_a_part_uses_vanillas_defaults() {
 }
 
 /// A removed vehicle lets its rider off at the rider's own x and z, at the higher of the two
-/// heights (`LivingEntity.dismountVehicle`), without asking where; the part hears why.
+/// heights (`LivingEntity.dismountVehicle`), without asking where; the part hears why. A
+/// general rider gets off at the level's removal sweep.
 #[test]
 #[ignore = "daily"]
 fn a_removed_vehicle_lets_its_rider_off_where_it_is() {
@@ -238,6 +239,8 @@ fn a_removed_vehicle_lets_its_rider_off_where_it_is() {
         let index = rows.iter().position(|row| row.id == rider.id()).unwrap();
         rows.update(index, |row| row.position = Vec3::new(1.5, 200.4125, 0.5));
         assert!(game.entity_discard(seat));
+        // A general rider gets off at the removal sweep.
+        game.native_removals_flush();
         assert_near(row_at(game, rider.id()), [1.5, 200.4125, 0.5]);
         assert_eq!(
             taken(&log),

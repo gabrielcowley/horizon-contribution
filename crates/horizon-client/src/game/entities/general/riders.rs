@@ -592,6 +592,41 @@ impl Game<'_> {
         self.general_dismount_spot(vehicle, rider)
     }
 
+    /// The general riders of the general row `vehicle`, removed and being
+    /// swept, get off by the removed vehicle's rule (at their own x and z, at
+    /// the higher y) and the vehicle's parts hear `VehicleRemoved`.
+    pub(in crate::game) fn eject_removed_general_riders(&mut self, vehicle: u32) {
+        let Some(vehicle_y) = self.general_row(vehicle).map(|row| row.position.y) else {
+            return;
+        };
+        let riders: Vec<(usize, u32)> = self
+            .resident_entities
+            .general
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.mount == Some(vehicle))
+            .map(|(index, row)| (index, row.id))
+            .collect();
+        for (index, id) in riders {
+            let row = &self.resident_entities.general.rows[index];
+            let bounds = row.bounds();
+            let at = self.removed_vehicle_dismount_point(
+                row.position,
+                bounds.max_position().x - bounds.min_position().x,
+                bounds.max_position().y - bounds.min_position().y,
+                vehicle_y,
+            );
+            self.resident_entities.general.rows.update(index, |row| {
+                row.mount = None;
+                row.position = at;
+                row.previous = at;
+            });
+            self.resident_entities.general.mount_writes += 1;
+            self.general_rider_left(vehicle, id, PassengerRemoval::VehicleRemoved);
+        }
+    }
+
     /// A general row's riders that are general rows sit where their
     /// vehicle's placement puts them (`Entity.positionRider`), on both sides.
     pub(in crate::game) fn position_general_rider(&mut self, index: usize) {
