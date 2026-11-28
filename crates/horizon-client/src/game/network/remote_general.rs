@@ -18,6 +18,7 @@ impl Game<'_> {
         kind: &str,
         position: [f64; 3],
         rotation: [f32; 2],
+        _velocity: [f64; 3],
     ) -> bool {
         let Some(type_slot) = general_type_catalog().slot(kind) else {
             return false;
@@ -33,8 +34,8 @@ impl Game<'_> {
             type_slot,
             position: at,
             previous: at,
-            // `Entity`'s own zero: `recreateFromPacket`'s `lerpMotion` sets the sent one next
-            // (`remote_general_motion`), through the type's `general_motion_received`.
+            // `Entity`'s own zero: the packet's velocity reaches the row just after, through
+            // `recreateFromPacket`'s `lerpMotion` (`remote_general_motion`).
             velocity: Vec3::new(0.0, 0.0, 0.0),
             rotation,
             previous_rotation: rotation,
