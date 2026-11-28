@@ -78,7 +78,10 @@ type's attribute set (`declare_entity_attributes` with the
 `minecraft:armor_stand` template), and is burnt, drowned, suffocated, hurt by
 falls, the void, explosions, `/kill` and `/damage` as `LivingEntity.hurtServer`
 hurts an entity with no armor and no effects, with the living damage hooks.
-It pushes and is pushed. Its body runs after the type's `general_entity_tick`,
+It pushes and is pushed on each entity's turn, as vanilla's `pushEntities`
+runs both ways, and `general_push` answers when another entity's turn pushes
+it. A rider gets the body's base tick but no travel (`rideTick`), and a client
+draws a row's flames while the server's on-fire flag is set. Its body runs after the type's `general_entity_tick`,
 as `super.tick()` follows a subclass's lines, and saves with the row under
 vanilla's names (`Health`, `Fire`, `Air`, `HurtTime`, `DeathTime`). A type's
 `fire_immune` (`general_entity_fire_immune`) and a row's own

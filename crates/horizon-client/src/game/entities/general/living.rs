@@ -49,6 +49,9 @@ pub struct GeneralLiving {
     pub death_time: i32,
     /// The row's own fire immunity (`entity_set_fire_immune`), over its type's.
     pub fire_immune: Option<bool>,
+    /// On a client, `DATA_SHARED_FLAGS_ID`'s on-fire bit as the server last sent it: a
+    /// client's `Entity.isOnFire` reads it beside its own fire ticks.
+    pub shared_on_fire: bool,
 }
 
 impl GeneralLiving {
@@ -65,6 +68,7 @@ impl GeneralLiving {
             last_hurt: 0.0,
             death_time: 0,
             fire_immune: None,
+            shared_on_fire: false,
         }
     }
 
@@ -132,6 +136,15 @@ impl GeneralRow {
             .as_ref()
             .and_then(|living| living.fire_immune)
             .unwrap_or_else(|| general_type_catalog().fire_immune(self.type_slot))
+    }
+
+    /// `Entity.displayFireAnimation` of a living row: it is on fire (its fire ticks, or on a
+    /// client the server's on-fire flag) and not fire immune.
+    pub fn displays_fire(&self) -> bool {
+        self.living
+            .as_ref()
+            .is_some_and(|living| living.fire_ticks > 0 || living.shared_on_fire)
+            && !self.fire_immune()
     }
 
     /// The row's living body, lent to the shared movement code for one step.
@@ -218,15 +231,36 @@ impl Game<'_> {
     /// the block effects, `pushEntities`), and the death count. A row without a living
     /// body, or one its tick removed, is left alone.
     pub(in crate::game) fn tick_general_living(&mut self, index: usize) {
+        self.tick_general_living_as(index, false);
+    }
+
+    /// The living tick of a rider (`Entity.rideTick`): its velocity is zeroed and it gets
+    /// the base part of the body tick (the void, fire, air, the wall, damage and death),
+    /// but no travel and no pushing: its vehicle places it.
+    pub(in crate::game) fn tick_general_living_rider(&mut self, index: usize) {
+        self.tick_general_living_as(index, true);
+    }
+
+    fn tick_general_living_as(&mut self, index: usize, riding: bool) {
         let Some(row) = self.resident_entities.general.rows.get(index) else {
             return;
         };
         if row.living.is_none() || self.persist.removals.contains(&Target::General(row.id)) {
             return;
         }
-        let id = row.id;
+        let (id, dead) = (
+            row.id,
+            row.living.as_ref().is_some_and(|living| living.dead()),
+        );
+        if riding {
+            // `Entity.rideTick`: `setDeltaMovement(Vec3.ZERO)` before the tick.
+            self.resident_entities
+                .general
+                .rows
+                .update(index, |row| row.velocity = Vec3::ZERO);
+        }
         // `LivingEntity.tickDeath`: a dead body lies for 20 ticks, then goes.
-        if row.living.as_ref().is_some_and(|living| living.dead()) {
+        if dead {
             self.resident_entities.general.rows.update(index, |row| {
                 if let Some(living) = row.living.as_deref_mut() {
                     living.death_time += 1;
@@ -248,7 +282,7 @@ impl Game<'_> {
             }
         });
         let heights = self.general_living_base_tick(id);
-        if !self.general_living_alive(id) {
+        if riding || !self.general_living_alive(id) {
             return;
         }
         self.general_living_travel(id, heights);
@@ -690,9 +724,14 @@ impl Game<'_> {
             .collect()
     }
 
-    /// `LivingEntity.pushEntities` of a living row: each pushable entity its box meets
-    /// (a mob, the players, another living row) is pushed apart from it, and it from
-    /// them (`Entity.push(Entity)`), unless the row's `general_push` keeps it put.
+    /// `LivingEntity.pushEntities` of a living row, on its own turn: each pushable entity its
+    /// box meets (a mob, the players, a server's players, another living row) gets
+    /// `doPush(other)`, which is `other.push(this row)` (`Entity.push(Entity)`): the pair is
+    /// pushed apart, both ways. The other entity's `push` decides, so this row's own
+    /// `general_push` is not asked here but on the others' turns
+    /// ([`Self::push_general_living_from_others`]); another living row's is. A server's
+    /// players move only on their own clients, so their share is left out, as vanilla's
+    /// server push never reaches them.
     fn general_living_push_entities(&mut self, id: u32) {
         let Some(i) = self.general_living_index(id) else {
             return;
@@ -703,7 +742,6 @@ impl Game<'_> {
             row.bounds()
         };
         let at = row.position;
-        let kind = general_type_catalog().key(row.type_slot).to_owned();
         let mut targets: Vec<(Target, Vec3)> = Vec::new();
         for m in &self.mobs {
             if m.pushable() && m.bounds().intersects(bounds) {
@@ -715,6 +753,18 @@ impl Game<'_> {
             && p.bounds().intersects(bounds)
         {
             targets.push((Target::Player, p.position));
+        }
+        if let Some(host) = self.lan.as_ref() {
+            for g in host.hub.guests.iter().filter(|g| {
+                host.hub.here(g)
+                    && g.loaded
+                    && !g.dead
+                    && !g.spectator()
+                    && g.bounds().intersects(bounds)
+            }) {
+                let [x, y, z] = g.position;
+                targets.push((Target::Guest(g.conn), Vec3::new(x, y, z)));
+            }
         }
         for other in self.resident_entities.general.rows.iter() {
             if other.id == id
@@ -732,19 +782,11 @@ impl Game<'_> {
             }
         }
         for (target, other) in targets {
-            // Entity.push(Entity): the push away from the other entity, at most 0.05.
-            let (mut xa, mut za) = (other.x - at.x, other.z - at.z);
-            let mut dd = xa.abs().max(za.abs());
-            if dd < f64::from(0.01_f32) {
+            // `other.push(this)`: this row is pushed away from the other entity, at
+            // most 0.05, and the other the opposite way.
+            let Some((xa, za)) = push_apart(at, other) else {
                 continue;
-            }
-            dd = dd.sqrt();
-            xa /= dd;
-            za /= dd;
-            let pow = (1.0 / dd).min(1.0);
-            xa *= pow * f64::from(0.05_f32);
-            za *= pow * f64::from(0.05_f32);
-            // `doPush(other)` is `other.push(this)`: the other entity first...
+            };
             match target {
                 Target::Mob(mob) => {
                     if let Some(m) = self.mobs.iter_mut().find(|m| m.id == mob) {
@@ -756,10 +798,12 @@ impl Game<'_> {
                         p.velocity = Vec3::new(p.velocity.x + xa, p.velocity.y, p.velocity.z + za);
                     }
                 }
+                // Another living row's own `push(Entity)` may keep the pair apart.
                 Target::General(other_id) => {
-                    if self.general_pushed_by(other_id, id)
-                        && let Some(j) = self.general_living_index(other_id)
-                    {
+                    if !self.general_pushed_by(other_id, id) {
+                        continue;
+                    }
+                    if let Some(j) = self.general_living_index(other_id) {
                         self.resident_entities.general.rows.update(j, |row| {
                             row.velocity =
                                 Vec3::new(row.velocity.x + xa, row.velocity.y, row.velocity.z + za);
@@ -768,16 +812,115 @@ impl Game<'_> {
                 }
                 _ => {}
             }
-            // ...then this row the other way, when its own `push` lets it.
-            let _ = &kind;
-            if self.general_pushed_by(id, self.network_entity_id(target).unwrap_or(0) as u32)
-                && let Some(i) = self.general_living_index(id)
-            {
-                self.resident_entities.general.rows.update(i, |row| {
-                    row.velocity =
-                        Vec3::new(row.velocity.x - xa, row.velocity.y, row.velocity.z - za);
-                });
+            self.push_general_row(id, -xa, -za);
+        }
+    }
+
+    /// The other half of `pushEntities` with a living row: each mob, the window's player and
+    /// each of a server's players whose box meets a living row runs `doPush(row)` on its own
+    /// turn, which is `row.push(it)`: the row's `general_push` (vanilla's yes) decides, then
+    /// the row is pushed away from it and a mob back the other way. A player's share moves
+    /// only the server's copy of it, which no player feels (as `push_carts`), so it is left
+    /// out. It runs at the start of the rows' phase, after the mobs have moved.
+    pub(in crate::game) fn push_general_living_from_others(&mut self) {
+        let rows: Vec<(u32, Aabb, Vec3)> = self
+            .resident_entities
+            .general
+            .rows
+            .iter()
+            .filter(|row| {
+                row.mount.is_none()
+                    && row.living.as_ref().is_some_and(|living| !living.dead())
+                    && !self.persist.removals.contains(&Target::General(row.id))
+            })
+            .map(|row| {
+                use super::super::entity::Entity;
+                (row.id, row.bounds(), row.position)
+            })
+            .collect();
+        if rows.is_empty() {
+            return;
+        }
+        let teams = self.mob_teams();
+        // (who, by network id, feet, box)
+        let mut pushers: Vec<(Option<u32>, u32, Vec3, Aabb)> = self
+            .mobs
+            .iter()
+            .filter(|m| {
+                !m.removed
+                    && m.alive()
+                    && m.species() != horizon_client::mobs::Species::Bat
+                    && horizon_client::scoreboard::pushable_by(
+                        teams.of(horizon_client::mobs::Who::Mob(m.id)),
+                        None,
+                        true,
+                    )
+            })
+            .map(|m| (Some(m.id), m.id, m.position, m.bounds()))
+            .collect();
+        drop(teams);
+        if let Some(p) = self.player.as_ref()
+            && !self.spectator()
+        {
+            let by = self.network_entity_id(Target::Player).unwrap_or(0) as u32;
+            pushers.push((None, by, p.position, p.bounds()));
+        }
+        if let Some(host) = self.lan.as_ref() {
+            for g in host.hub.guests.iter().filter(|g| {
+                host.hub.here(g) && g.loaded && !g.dead && !g.spectator() && g.vehicle.is_none()
+            }) {
+                let [x, y, z] = g.position;
+                pushers.push((None, g.entity_id as u32, Vec3::new(x, y, z), g.bounds()));
             }
+        }
+        for (mob, by, feet, bb) in pushers {
+            for &(id, bounds, at) in &rows {
+                if !bb.intersects(bounds) {
+                    continue;
+                }
+                // A mob riding the row pushes it not (`isPassengerOfSameVehicle`).
+                if mob.is_some_and(|m| {
+                    self.mobs
+                        .iter()
+                        .find(|x| x.id == m)
+                        .is_some_and(|x| x.extra.mount == Some(id))
+                }) {
+                    continue;
+                }
+                // `row.push(it)`: `xa` runs from the row to the pusher.
+                let Some((xa, za)) = push_apart(at, feet) else {
+                    continue;
+                };
+                if !self.general_pushed_by(id, by) {
+                    continue;
+                }
+                self.push_general_row(id, -xa, -za);
+                if let Some(m) = mob
+                    && let Some(m) = self.mobs.iter_mut().find(|x| x.id == m)
+                    && m.pushable()
+                    && m.rider.is_none()
+                {
+                    m.velocity = Vec3::new(m.velocity.x + xa, m.velocity.y, m.velocity.z + za);
+                }
+            }
+        }
+    }
+
+    /// `Entity.push(x, 0, z)` on living row `id`, when it carries no one (`isVehicle`).
+    fn push_general_row(&mut self, id: u32, xa: f64, za: f64) {
+        if self
+            .resident_entities
+            .general
+            .rows
+            .iter()
+            .any(|row| row.mount == Some(id))
+        {
+            return;
+        }
+        if let Some(i) = self.general_living_index(id) {
+            self.resident_entities.general.rows.update(i, |row| {
+                row.velocity = Vec3::new(row.velocity.x + xa, row.velocity.y, row.velocity.z + za);
+            });
         }
     }
 
@@ -1071,4 +1214,22 @@ pub(in crate::game) fn general_moment_hooked(
     kind: &str,
 ) -> bool {
     mod_api::__private::has_part_hook(id) && mod_api::__private::entity_part_hooked(id, name, kind)
+}
+
+/// `Entity.push(Entity)`'s impulse with `this` at `at` and the other entity at `other`: the
+/// other's share `(xa, za)` (this one gets the opposite), at most 0.05 on an axis; none when
+/// the two stand within 0.01 of each other.
+fn push_apart(at: Vec3, other: Vec3) -> Option<(f64, f64)> {
+    let (mut xa, mut za) = (other.x - at.x, other.z - at.z);
+    let mut dd = xa.abs().max(za.abs());
+    if dd < f64::from(0.01_f32) {
+        return None;
+    }
+    dd = dd.sqrt();
+    xa /= dd;
+    za /= dd;
+    let pow = (1.0 / dd).min(1.0);
+    xa *= pow;
+    za *= pow;
+    Some((xa * f64::from(0.05_f32), za * f64::from(0.05_f32)))
 }

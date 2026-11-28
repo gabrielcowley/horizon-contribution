@@ -613,6 +613,7 @@ impl Game<'_> {
                     }
                 }
                 self.remote_mob_data(p.id, &p.values);
+                self.remote_general_data(p.id, &p.values);
                 if let Some(m) = self.mob_index.get_mut(&mut self.mobs, p.id as u32)
                     && m.species() == horizon_client::mobs::Species::Creeper
                 {

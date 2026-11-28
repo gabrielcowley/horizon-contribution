@@ -7,11 +7,13 @@ use super::Game;
 use crate::game::general::{GeneralRow, general_type_catalog};
 use horizon_client::join_seq::JoinSeq;
 use horizon_core::geometry::Vec3;
+use horizon_core::nbt::Tag;
+use horizon_protocol::entity_data::Value;
 
 impl Game<'_> {
     /// `ClientboundAddEntityPacket` for a general type: the client's row, in place of any row
     /// that had the id before. False for a kind no mod declared as a general type.
-    pub(super) fn spawn_remote_general(
+    pub(in crate::game) fn spawn_remote_general(
         &mut self,
         id: i32,
         kind: &str,
@@ -24,6 +26,9 @@ impl Game<'_> {
         };
         let id = id as u32;
         let at = Vec3::new(position[0], position[1], position[2]);
+        // A living body starts at full health; the entity data that follows the add
+        // packet brings the server's health and on-fire flag.
+        let living = self.general_living_for(type_slot, &Tag::Compound(Default::default()));
         let rows = &mut self.resident_entities.general.rows;
         rows.retain(|row| row.id != id);
         rows.push(GeneralRow {
@@ -44,7 +49,7 @@ impl Game<'_> {
             needs_sync: false,
             age: 0,
             attachment_lifetime: Default::default(),
-            living: None,
+            living,
         });
         // The box and the rest of its attachments follow the add packet; a
         // row that had them under this id before keeps none of them.
@@ -62,6 +67,30 @@ impl Game<'_> {
             row.velocity = Vec3::new(velocity[0], velocity[1], velocity[2]);
         });
         true
+    }
+
+    /// `ClientboundSetEntityDataPacket` for a client's living row: `DATA_SHARED_FLAGS_ID`'s
+    /// on-fire bit, which its flames are drawn from, and `LivingEntity.DATA_HEALTH_ID`.
+    pub(in crate::game) fn remote_general_data(&mut self, id: i32, values: &[(u8, i32, Value)]) {
+        let rows = &mut self.resident_entities.general.rows;
+        let Some(i) = rows
+            .iter()
+            .position(|row| row.id == id as u32 && row.living.is_some())
+        else {
+            return;
+        };
+        rows.update(i, |row| {
+            let Some(living) = row.living.as_deref_mut() else {
+                return;
+            };
+            for (index, _, value) in values {
+                match (index, value) {
+                    (0, Value::Byte(flags)) => living.shared_on_fire = flags & 1 != 0,
+                    (9, Value::Float(health)) => living.health = *health,
+                    _ => {}
+                }
+            }
+        });
     }
 
     /// `ClientboundRemoveEntitiesPacket`: the client's rows among `removed` go.

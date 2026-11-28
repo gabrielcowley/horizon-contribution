@@ -599,7 +599,8 @@ pub struct GeneralRow {
     pub attachment_lifetime: horizon_mod_runtime::attachments::AttachmentLifetime,
     /// The living half of a row whose type has a living body (`GeneralBody::Living`):
     /// health, fire, air and the rest of `LivingEntity`'s state. None for any other
-    /// row, and on a client.
+    /// row. A client's copy holds what the server's entity data sends: health and the
+    /// on-fire flag.
     pub living: Option<Box<living::GeneralLiving>>,
 }
 

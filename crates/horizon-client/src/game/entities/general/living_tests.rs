@@ -272,51 +272,205 @@ fn kill_and_the_void_reach_the_crates_own_hurt() {
     });
 }
 
-/// A crate pushes a zombie its box meets away from it and is pushed back the other way;
-/// a `general_push` that refuses keeps the crate put while the zombie is still pushed.
+/// The push `Entity.push(Entity)` gives a pair 0.3 apart on x: `sqrt(0.3)`, scaled by
+/// 0.05.
+fn push_at_0_3() -> f64 {
+    0.3_f64.sqrt() * f64::from(0.05_f32)
+}
+
+fn summon_still_zombie(game: &mut Game<'_>, at: [f64; 3]) -> u32 {
+    let mut no_ai = Compound::new();
+    no_ai.insert("NoAI".into(), Tag::Byte(1));
+    game.summon("minecraft:overworld", "minecraft:zombie", at, no_ai)
+        .unwrap()
+}
+
+fn mob_velocity_x(game: &Game<'_>, id: u32) -> f64 {
+    game.mobs.iter().find(|m| m.id == id).unwrap().velocity.x
+}
+
+/// A crate and a zombie push each other apart on both their turns, as vanilla's
+/// `pushEntities` runs for each: the zombie's `doPush(crate)` asks the crate's
+/// `general_push`, the crate's own `doPush(zombie)` is the zombie's vanilla `push`. So a
+/// crate whose `general_push` says no is still pushed on its own turn, once.
 #[test]
 #[ignore = "daily"]
-fn a_crate_and_a_zombie_push_each_other_apart() {
+fn a_crate_and_a_zombie_push_each_other_on_both_turns() {
     with_crates(|game, script| {
-        let mut no_ai = Compound::new();
-        no_ai.insert("NoAI".into(), Tag::Byte(1));
-        let zombie = game
-            .summon(
-                "minecraft:overworld",
-                "minecraft:zombie",
-                [8.8, 64.0, 8.5],
-                no_ai,
-            )
-            .unwrap();
+        let zombie = summon_still_zombie(game, [8.8, 64.0, 8.5]);
         let id = spawn(game, [8.5, 64.0, 8.5]);
         tick(game);
-        let pushed = game
-            .mobs
-            .iter()
-            .find(|m| m.id == zombie)
-            .unwrap()
-            .velocity
-            .x;
-        assert!(pushed > 0.0, "the zombie is pushed east: {pushed}");
-        assert!(row(game, id).unwrap().velocity.x < 0.0, "the crate west");
+        let pushed = mob_velocity_x(game, zombie);
+        assert!(
+            pushed > 1.5 * push_at_0_3(),
+            "the zombie is pushed east twice: {pushed}"
+        );
+        assert!(
+            row(game, id).unwrap().velocity.x < -push_at_0_3(),
+            "the crate west, twice"
+        );
 
         script.lock().unwrap().pushed = Some(false);
-        let still = spawn(game, [12.5, 64.0, 12.5]);
-        let other = game
-            .summon(
-                "minecraft:overworld",
-                "minecraft:zombie",
-                [12.8, 64.0, 12.5],
-                {
-                    let mut tag = Compound::new();
-                    tag.insert("NoAI".into(), Tag::Byte(1));
-                    tag
-                },
-            )
-            .unwrap();
+        let kept = spawn(game, [12.5, 64.0, 12.5]);
+        let other = summon_still_zombie(game, [12.8, 64.0, 12.5]);
         tick(game);
-        assert!(game.mobs.iter().find(|m| m.id == other).unwrap().velocity.x > 0.0);
-        assert_eq!(row(game, still).unwrap().velocity.x, 0.0);
+        let once = push_at_0_3();
+        let zombie_x = mob_velocity_x(game, other);
+        assert!(
+            (zombie_x - once).abs() < 1e-9,
+            "the zombie once: {zombie_x}"
+        );
+        let crate_x = row(game, kept).unwrap().velocity.x;
+        assert!((crate_x + once).abs() < 1e-9, "the crate once: {crate_x}");
+    });
+}
+
+/// One player of a server, standing at `at` in the overworld.
+fn join_guest(game: &mut Game<'_>, at: [f64; 3]) -> i32 {
+    use horizon_client::lan::{Joined, NetConfig, PlayerSender, guest::Guest, hub::HubConfig};
+    use horizon_protocol::packets::configuration::ClientInformation;
+    use std::sync::atomic::{AtomicI32, AtomicUsize};
+    game.lan_host(
+        crate::game::lan::LanSettings {
+            port: 0,
+            guest_commands: false,
+            force_game_mode: false,
+        },
+        NetConfig {
+            listen: false,
+            announce: false,
+            lod_distance: 0,
+            ..NetConfig::lan(0, String::new(), 2)
+        },
+        HubConfig {
+            default_game_mode: 0,
+            guest_commands: false,
+            force_game_mode: false,
+            hardcore: false,
+            view_distance: 2,
+            simulation_distance: 2,
+            dimension: "minecraft:overworld".into(),
+            allow_flight: true,
+            seed: 0,
+            max_players: 2,
+            integrated: true,
+            levels: game.level_shapes,
+            level_seeds: game.levels.runtime.seeds(),
+        },
+    )
+    .unwrap();
+    let (tx, _rx) = std::sync::mpsc::channel();
+    let me = game.take_entity_id() as i32;
+    let mut guest = Guest::new(
+        Joined {
+            conn: 12,
+            uuid: 12,
+            name: "guest12".into(),
+            properties: Vec::new(),
+            info: ClientInformation::new(8),
+            brand: String::new(),
+            sender: PlayerSender::new(tx, Arc::new(AtomicUsize::new(0))),
+            latency: Arc::new(AtomicI32::new(0)),
+            address: "127.0.0.1:1".parse().unwrap(),
+            expected: false,
+        },
+        me,
+        at,
+        2,
+    );
+    guest.placed = true;
+    guest.loaded = true;
+    guest.dimension = "minecraft:overworld".into();
+    game.lan.as_mut().unwrap().hub.guests.push(guest);
+    me
+}
+
+/// A server's player pushes a crate on its own turn, and the crate's own turn pushes the
+/// pair as well: the crate moves away on both, and on its own turn alone when its
+/// `general_push` refuses the player. The player's share moves only the server's copy,
+/// which no player feels, so the player stays where it is.
+#[test]
+#[ignore = "daily"]
+fn a_servers_player_and_a_crate_push_each_other() {
+    for refuses in [false, true] {
+        with_crates(|game, script| {
+            join_guest(game, [8.8, 64.0, 8.5]);
+            let id = spawn(game, [8.5, 64.0, 8.5]);
+            script.lock().unwrap().pushed = refuses.then_some(false);
+            tick(game);
+            let x = row(game, id).unwrap().velocity.x;
+            let once = push_at_0_3();
+            if refuses {
+                assert!((x + once).abs() < 1e-9, "its own turn only: {x}");
+            } else {
+                assert!(x < -once, "both turns: {x}");
+            }
+            let guest = &game.lan.as_ref().unwrap().hub.guests[0];
+            assert_eq!(guest.position, [8.8, 64.0, 8.5], "no player feels it");
+        });
+    }
+}
+
+/// A crate riding another gets the base part of its body tick (its fire burns down) but
+/// no travel (`Entity.rideTick`): its velocity is zeroed and gravity does not pull it.
+#[test]
+#[ignore = "daily"]
+fn a_riding_crate_burns_but_does_not_travel() {
+    with_crates(|game, _| {
+        let vehicle = spawn(game, [8.5, 64.0, 8.5]);
+        let rider = spawn(game, [8.5, 66.0, 8.5]);
+        let rows = &mut game.resident_entities.general.rows;
+        let i = rows.iter().position(|row| row.id == rider).unwrap();
+        rows.update(i, |row| {
+            row.mount = Some(vehicle);
+            row.velocity = Vec3::new(0.3, 0.0, 0.0);
+            row.living.as_deref_mut().unwrap().fire_ticks = 100;
+        });
+        game.resident_entities.general.mount_writes += 1;
+        tick(game);
+        assert_eq!(living(game, rider).fire_ticks, 99, "its fire burns down");
+        let row = row(game, rider).unwrap();
+        assert_eq!(row.velocity, Vec3::ZERO, "rideTick zeroes its velocity");
+        assert_eq!(row.position.y, 66.0, "and it does not fall");
+    });
+}
+
+/// A client's copy of a crate burns while the server's on-fire flag is set
+/// (`Entity.isOnFire` on a client), and takes the server's health.
+#[test]
+#[ignore = "daily"]
+fn a_clients_crate_burns_while_the_servers_flag_is_set() {
+    use horizon_protocol::entity_data::{Value, serializer};
+    with_crates(|game, _| {
+        assert!(game.spawn_remote_general(
+            900,
+            "mymod:crate",
+            [8.5, 64.0, 8.5],
+            [0.0, 0.0],
+            [0.0; 3]
+        ));
+        let row = |game: &Game<'_>| {
+            game.resident_entities
+                .general
+                .rows
+                .iter()
+                .find(|row| row.id == 900)
+                .unwrap()
+                .clone()
+        };
+        assert!(!row(game).displays_fire(), "not before the flag");
+        game.remote_general_data(
+            900,
+            &[
+                (0, serializer::BYTE, Value::Byte(1)),
+                (9, serializer::FLOAT, Value::Float(3.0)),
+            ],
+        );
+        let burning = row(game);
+        assert!(burning.displays_fire(), "the flag lights it");
+        assert_eq!(burning.living.as_ref().unwrap().health, 3.0);
+        game.remote_general_data(900, &[(0, serializer::BYTE, Value::Byte(0))]);
+        assert!(!row(game).displays_fire(), "and its clearing puts it out");
     });
 }
 
