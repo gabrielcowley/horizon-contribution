@@ -11,7 +11,7 @@ impl Game<'_> {
         &mut self,
         kind: &str,
         entity: mod_api::EntityRef,
-        level: mod_api::LevelRef,
+        level: LevelRef,
     ) {
         self.fire_general_entity_client_tick(kind, entity, level);
     }
