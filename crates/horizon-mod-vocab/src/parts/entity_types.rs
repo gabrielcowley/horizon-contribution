@@ -84,6 +84,13 @@ pub struct GeneralEntityTypeDeclaration {
     /// (vanilla's `setShouldReceiveVelocityUpdates`, `true` by default).
     /// Without it, the velocity reaches clients only in the spawn packet.
     pub sends_velocity: bool,
+    /// The vanilla behaviour set the type's rows run ([`GeneralBody`]):
+    /// [`GeneralBody::None`] until `general_entity_body` sets one.
+    pub body: GeneralBody,
+    /// Whether fire and lava leave the type's rows unhurt and unlit (vanilla's
+    /// `EntityType.Builder.fireImmune`), `false` until `general_entity_fire_immune`
+    /// sets it. A row may change its own with `entity_set_fire_immune`.
+    pub fire_immune: bool,
     /// The payload schema version instances of the type carry.
     pub payload_version: u16,
     /// The ids of loaded mods this type requires, every one of which must be
@@ -106,8 +113,59 @@ impl Default for GeneralEntityTypeDeclaration {
             tracking_chunks: 5,
             update_interval: 3,
             sends_velocity: true,
+            body: GeneralBody::None,
+            fire_immune: false,
             payload_version: 1,
             required_features: Vec::new(),
+        }
+    }
+}
+
+/// The vanilla behaviour set a general entity type's rows run, lifted out of
+/// the vanilla family that has it, so a mod's type moves, burns and takes
+/// hits as that family does.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum GeneralBody {
+    /// No physics: the row stays where it is put and nothing hurts it.
+    None,
+    /// Vanilla's `LivingEntity` without AI, the armor stand's path: gravity,
+    /// fluids, block collision, pushing, health from its attribute set
+    /// (`declare_entity_attributes` with the `minecraft:armor_stand`
+    /// template), fire, lava, drowning, falls, suffocation, the void,
+    /// explosions, `/kill` and melee.
+    Living(LivingSpec),
+}
+
+/// What a [`GeneralBody::Living`] type sounds like and whether potions
+/// reach it. A sound is a sound event id (`minecraft:entity.generic.hurt`);
+/// `None` is silence.
+#[derive(Clone, Debug, PartialEq)]
+// exhaustive: built with `LivingSpec::default()` and field updates
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct LivingSpec {
+    /// `LivingEntity.getHurtSound`.
+    pub hurt_sound: Option<String>,
+    /// `LivingEntity.getDeathSound`.
+    pub death_sound: Option<String>,
+    /// `LivingEntity.getFallSounds().small()`: a fall of at most 4 blocks of damage.
+    pub small_fall_sound: Option<String>,
+    /// `LivingEntity.getFallSounds().big()`.
+    pub big_fall_sound: Option<String>,
+    /// `LivingEntity.isAffectedByPotions`.
+    pub affected_by_potions: bool,
+}
+
+/// `LivingEntity`'s own sounds (`entity.generic.*`), and potions reach it.
+impl Default for LivingSpec {
+    fn default() -> Self {
+        Self {
+            hurt_sound: Some("minecraft:entity.generic.hurt".to_owned()),
+            death_sound: Some("minecraft:entity.generic.death".to_owned()),
+            small_fall_sound: Some("minecraft:entity.generic.small_fall".to_owned()),
+            big_fall_sound: Some("minecraft:entity.generic.big_fall".to_owned()),
+            affected_by_potions: true,
         }
     }
 }
@@ -183,5 +241,31 @@ pub trait GeneralTypesRegistrar {
         &mut self,
         path: &str,
         sends_velocity: bool,
+    ) -> Result<(), GeneralEntityRegistrationError>;
+
+    /// The vanilla behaviour set the rows of the mod's general type `path`
+    /// (declared before this call) run: vanilla's `LivingEntity` with
+    /// [`GeneralBody::Living`]. [`GeneralBody::None`] until this sets one.
+    ///
+    /// A path that names no type this mod declared refuses with `InvalidId`,
+    /// and a call after the registry froze with `Frozen`, naming the mod,
+    /// without panicking.
+    fn general_entity_body(
+        &mut self,
+        path: &str,
+        body: GeneralBody,
+    ) -> Result<(), GeneralEntityRegistrationError>;
+
+    /// Whether the rows of the mod's general type `path` (declared before
+    /// this call) are immune to fire (vanilla's `EntityType.Builder.fireImmune`):
+    /// fire and lava neither light nor hurt them. `false` until this sets it.
+    ///
+    /// A path that names no type this mod declared refuses with `InvalidId`,
+    /// and a call after the registry froze with `Frozen`, naming the mod,
+    /// without panicking.
+    fn general_entity_fire_immune(
+        &mut self,
+        path: &str,
+        fire_immune: bool,
     ) -> Result<(), GeneralEntityRegistrationError>;
 }

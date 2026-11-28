@@ -65,6 +65,24 @@ impl Game<'_> {
             .chain(self.boats.iter().map(super::boats::Boat::bounds))
             .collect()
     }
+    /// [`Self::item_entity_collisions`] with each entity named, for a mover that asks
+    /// its own `canCollideWith` of each of them (a general entity row with a living
+    /// body, `general_can_collide_with`).
+    pub(in crate::game) fn mover_collision_candidates(
+        &self,
+    ) -> Vec<(Option<super::commands::Target>, Aabb)> {
+        use super::commands::Target;
+        self.mobs
+            .iter()
+            .filter(|m| stops_movers(m))
+            .map(|m| (Some(Target::Mob(m.id)), m.bounds()))
+            .chain(
+                self.boats
+                    .iter()
+                    .map(|b| (Some(Target::Boat(b.id)), super::boats::Boat::bounds(b))),
+            )
+            .collect()
+    }
     /// [`Self::item_entity_collisions`] for an armor stand, which mobs can ride
     /// (`/ride`): each mob's box comes with the vehicle at the bottom of what it rides,
     /// so the stand leaves its own riders out (`isPassengerOfSameVehicle`, through the

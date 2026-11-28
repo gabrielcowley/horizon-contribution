@@ -57,6 +57,7 @@ mod general_handle_tests {
             needs_sync: false,
             age: 0,
             attachment_lifetime: Default::default(),
+            living: None,
         }
     }
 

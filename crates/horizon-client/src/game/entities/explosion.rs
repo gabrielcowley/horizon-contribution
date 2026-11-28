@@ -1290,6 +1290,22 @@ impl Game<'_> {
                             self.hurt_boat_by(i, amount, false, self.explosion_kill_credit());
                         }
                     }
+                    // A general row with a living body is hurt as any living entity;
+                    // one without a body has no `hurtServer` of its own.
+                    EntityHandle::General(i) => {
+                        let id = self.resident_entities.general.rows[i].id;
+                        let causing = self.explosion_kill_credit();
+                        self.hurt_general(
+                            id,
+                            super::general::living::GeneralHit {
+                                damage_type,
+                                amount,
+                                direct: None,
+                                causing,
+                                from: Some(center),
+                            },
+                        );
+                    }
                     // `hurtServer` does nothing to the rest.
                     _ => {}
                 }

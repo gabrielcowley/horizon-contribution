@@ -50,7 +50,9 @@ pub(in crate::game) fn hurt_server_args<'a>(
         ),
         Hurting::Dragon(entity, source) => (entity, "minecraft:ender_dragon", source),
         Hurting::ArmorStand(entity, source) => (entity, "minecraft:armor_stand", source),
-        Hurting::Entity(entity, kind, source) => (entity, kind, source),
+        Hurting::Entity(entity, kind, source) | Hurting::General(entity, kind, source) => {
+            (entity, kind, source)
+        }
     }
 }
 

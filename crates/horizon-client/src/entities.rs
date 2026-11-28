@@ -92,6 +92,7 @@ mod item_fire;
 mod item_merge;
 mod item_move;
 mod item_no_physics;
+pub mod living_body;
 pub mod nameplate;
 mod obstacles;
 pub use fluids::{fall_reset_hit, fluid_flow, update_entity_fluids, water_clip};
@@ -1887,65 +1888,11 @@ pub struct StandRestKey {
     pub blocks: crate::world::RegionStamp,
     pub border: [u64; 4],
 }
-/// The fluid a stand travels in (`LivingEntity.travelInFluid`: water first,
-/// then lava), from the heights `Entity::push_by_fluid` measured.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum StandMedium {
-    Air,
-    Water,
-    /// `shallow`: `isInShallowFluid(LAVA)`, the lava is no deeper than
-    /// `getFluidJumpThreshold` (0.4 for a stand, whose eyes are above 0.4).
-    Lava {
-        shallow: bool,
-    },
-}
-impl StandMedium {
-    pub fn from_heights(water_height: f64, lava_height: f64) -> Self {
-        if water_height > 0.0 {
-            Self::Water
-        } else if lava_height > 0.0 {
-            Self::Lava {
-                shallow: lava_height <= 0.4,
-            }
-        } else {
-            Self::Air
-        }
-    }
-}
-/// Armor stands share LivingEntity's block/tag and trapdoor climb predicate.
-struct StandClimbing<'a> {
-    world: &'a World,
-    position: BlockPos,
-}
-impl horizon_world::climbing::ClimbingWorld for StandClimbing<'_> {
-    type Error = std::convert::Infallible;
-    fn is_spectator(&mut self) -> Result<bool, Self::Error> {
-        Ok(false)
-    }
-    fn is_fall_flying(&mut self) -> Result<bool, Self::Error> {
-        Ok(false)
-    }
-    fn block_position(&mut self) -> Result<BlockPos, Self::Error> {
-        Ok(self.position)
-    }
-    fn in_block_state(&mut self) -> Result<horizon_world::registry::BlockStateId, Self::Error> {
-        self.block_state(self.position)
-    }
-    fn block_state(
-        &mut self,
-        p: BlockPos,
-    ) -> Result<horizon_world::registry::BlockStateId, Self::Error> {
-        Ok(self.world.block(p.x, p.y, p.z))
-    }
-    fn set_last_climbable_position(&mut self, _: BlockPos) {}
-}
+/// The fluid a stand travels in: the living body's ([`living_body::LivingMedium`]).
+pub type StandMedium = living_body::LivingMedium;
 /// What a stand's travel carries from [`ArmorStand::tick_move`] to
-/// [`ArmorStand::tick_settle`].
-#[derive(Clone, Copy)]
-pub struct StandStep {
-    falling: bool,
-    friction: f32,
-}
+/// [`ArmorStand::tick_settle`]: the living body's ([`living_body::LivingStep`]).
+pub type StandStep = living_body::LivingStep;
 #[cfg(test)]
 impl ArmorStand {
     /// A whole travel for the unit tests, with no bubble column.
@@ -2240,22 +2187,13 @@ impl ArmorStand {
         registry: &horizon_world::registry::BlockRegistry,
         mut invulnerable: impl FnMut(&mut W, &str) -> bool,
     ) -> Option<&'static str> {
-        let (lo, hi) = (self.bounds().min_position(), self.bounds().max_position());
         // The damage type of the last hit that lowered its health.
         let mut hit_by = None;
-        let mut water = false;
-        let mut lava = false;
-        for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
-            for y in lo.y.floor() as i32..hi.y.ceil() as i32 {
-                for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                    match facts.get(world.block(x, y, z)).fluid {
-                        Fluid::Water => water = true,
-                        Fluid::Lava => lava = true,
-                        _ => {}
-                    }
-                }
-            }
-        }
+        // `applyEffectsFromBlocks` reaches a stand with physics only (a marker or
+        // NoGravity stand has `noPhysics`), and none that `baseTick`'s burn just
+        // broke (`isAffectedByBlocks` wants it not removed): the fire blocks are
+        // counted below, once the burn has run.
+        let (water, lava) = living_body::fluid_contacts(world, facts, self.bounds());
         if water {
             self.fire_ticks = 0;
         }
@@ -2272,44 +2210,16 @@ impl ArmorStand {
             }
             self.fire_ticks -= 1;
         }
-        // `applyEffectsFromBlocks` reaches a stand with physics only (a marker or
-        // NoGravity stand has `noPhysics`), and none that `baseTick`'s burn just
-        // broke (`isAffectedByBlocks` wants it not removed).
         let affected =
             !self.no_physics.unwrap_or(self.marker || self.no_gravity) && self.health > 0.5;
-        // The fire blocks the box (less 1e-5) is in, each visited once by
-        // `Entity.checkInsideBlocks`.
         let fires = if affected {
-            let b = self.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
-            let (lo, hi) = (b.min_position(), b.max_position());
-            let mut n = 0;
-            for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
-                for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
-                    for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                        let name = registry
-                            .state(world.block(x, y, z))
-                            .map(|s| s.name.as_str());
-                        if matches!(name, Some("minecraft:fire" | "minecraft:soul_fire")) {
-                            n += 1;
-                        }
-                    }
-                }
-            }
-            n
+            living_body::fire_blocks(world, registry, self.bounds())
         } else {
             0
         };
         if fires > 0 {
-            // FIRE_IGNITE, `BaseFireBlock.fireIgnite`, once a tick however many
-            // fire blocks: a negative `Fire` counts up by one; from 0 the stand
-            // is lit for 8 seconds, every tick it stays in the fire, against
-            // `baseTick`'s countdown.
-            if self.fire_ticks < 0 {
-                self.fire_ticks += 1;
-            }
-            if self.fire_ticks >= 0 {
-                self.fire_ticks = self.fire_ticks.max(160);
-            }
+            // FIRE_IGNITE, `BaseFireBlock.fireIgnite`.
+            living_body::fire_ignite(&mut self.fire_ticks);
             // Then each fire block's `runAfter` `hurt(inFire)`: `ArmorStand.hurtServer`
             // refuses it for an invulnerable, invisible or marker stand;
             // IGNITES_ARMOR_STANDS takes 0.15 off a burning stand and lights one
@@ -2396,113 +2306,12 @@ impl ArmorStand {
         entities: &[Aabb],
         context: &horizon_world::native_load_context::LoopContext,
     ) -> Option<StandStep> {
-        use crate::entity_rules::EntityRules;
         self.previous = self.position;
         if self.marker {
             return None;
         }
-        scene.subject =
-            self.feet_are_leather_boots()
-                .then_some(crate::collisions::PowderSnowSubject {
-                    leather_boots: true,
-                    ..Default::default()
-                });
-        let v = self.velocity;
-        let mut wanted = Vec3::new(
-            if v.x.abs() < 0.003 { 0.0 } else { v.x },
-            if v.y.abs() < 0.003 { 0.0 } else { v.y },
-            if v.z.abs() < 0.003 { 0.0 } else { v.z },
-        );
-        self.velocity = wanted;
-        // ArmorStand.travel: no physics with NoGravity, the velocity stays.
-        if self.is_no_gravity() {
-            return None;
-        }
-        // `travelInFluid` reads `isFalling` before the move and any push;
-        // `travelInAir` reads ground friction before the move.
-        let falling = wanted.y <= 0.0;
-        let friction = if !in_water && self.on_ground {
-            let below =
-                BlockPos::containing(self.position.subtract(Vec3::new(0.0, 0.500_001, 0.0)));
-            let kind = "minecraft:armor_stand";
-            block_friction(context, self.id, kind, scene.world, facts, below)
-        } else {
-            1.0
-        };
-        let on_climbable = |position| {
-            horizon_world::climbing::on_climbable(
-                &mut StandClimbing {
-                    world: scene.world,
-                    position: BlockPos::containing(position),
-                },
-                climbing,
-            )
-            .unwrap_or(false)
-        };
-        if !in_water && on_climbable(self.position) {
-            self.enchantment_fall_distance = 0.0;
-            // LivingEntity.handleOnClimbable; suppressing slide is Player-only.
-            let limit = f64::from(0.15f32);
-            wanted.x = wanted.x.clamp(-limit, limit);
-            wanted.z = wanted.z.clamp(-limit, limit);
-            if !wanted.y.is_nan() {
-                wanted.y = wanted.y.max(-limit);
-            }
-        }
-        let mut velocity = wanted;
-        let mut horizontal_collision = false;
-        // The stand's Entity.move goes through the move gate (arismoko/horizon#2414); PR 1a
-        // records the movement unchanged.
-        let mut gate = crate::move_gate::armed(
-            context,
-            self.id,
-            "minecraft:armor_stand",
-            horizon_world::entity_move::MoverType::SelfMovement,
-            wanted,
-        );
-        let wanted = gate.delta();
-        // Entity.collide: the world border's walls and the entities that
-        // `canBeCollidedWith` the stand stop it too.
-        let moved = crate::move_gate::scene_resolve_in_border_with(
-            &mut gate,
-            SceneCollisions {
-                world: scene.world,
-                binding: scene.binding,
-                subject: scene.subject,
-            },
-            self.bounds(),
-            wanted,
-            0.0,
-            self.on_ground,
-            border.map(|b| (b, [self.position.x, self.position.z])),
-            entities,
-        );
-        if let Ok(moved) = moved {
-            self.position = Vec3::new(
-                self.position.x + moved.x,
-                self.position.y + moved.y,
-                self.position.z + moved.z,
-            );
-            self.on_ground = wanted.y < 0.0 && moved.y > wanted.y;
-            // Entity.setOnGroundWithMovement: the block under the feet.
-            self.ground_support(scene, wanted);
-            if (wanted.x - moved.x).abs() >= f64::from(1.0e-5_f32) {
-                horizontal_collision = true;
-                velocity.x = 0.0;
-            }
-            if moved.y != wanted.y {
-                velocity.y = 0.0;
-            }
-            if (wanted.z - moved.z).abs() >= f64::from(1.0e-5_f32) {
-                horizontal_collision = true;
-                velocity.z = 0.0;
-            }
-        }
-        if !in_water && horizontal_collision && on_climbable(self.position) {
-            velocity.y = 0.2;
-        }
-        self.velocity = velocity;
-        Some(StandStep { falling, friction })
+        self.living_body()
+            .travel(scene, facts, climbing, in_water, border, entities, context)
     }
     /// `Entity.move(MoverType.SHULKER, delta)`: an opening shulker lid
     /// shoves the stand (one with physics) by `delta`. Blocks, the world
@@ -2541,177 +2350,62 @@ impl ArmorStand {
         mover: horizon_world::entity_move::MoverType,
         context: &horizon_world::native_load_context::LoopContext,
     ) {
-        let mut scene = SceneCollisions {
-            subject: self.feet_are_leather_boots().then_some(
-                crate::collisions::PowderSnowSubject {
-                    leather_boots: true,
-                    ..Default::default()
-                },
-            ),
-            ..scene
-        };
-        // The lid's `Entity.move(mover, delta)` goes through the
-        // move gate (arismoko/horizon#2414); PR 1a records the movement unchanged.
-        let mut gate =
-            crate::move_gate::armed(context, self.id, "minecraft:armor_stand", mover, delta);
-        let delta = gate.delta();
-        let Ok(moved) = crate::move_gate::scene_resolve_in_border_with(
-            &mut gate,
-            SceneCollisions {
-                world: scene.world,
-                binding: scene.binding,
-                subject: scene.subject,
-            },
-            self.bounds(),
+        self.living_body().shove(
+            scene,
             delta,
-            0.0,
-            self.on_ground,
-            border.map(|b| (b, [self.position.x, self.position.z])),
+            border,
             entities,
-        ) else {
-            return;
-        };
-        let length = moved.length_squared();
-        if length > 1.0e-7 || delta.length_squared() - length < 1.0e-7 {
-            self.position = self.position.add_vector(moved);
-        }
-        // Mth.equal on x and z; y only when the push had a vertical part.
-        if (delta.x - moved.x).abs() >= f64::from(1.0e-5_f32) {
-            self.velocity.x = -self.velocity.x * 0.0;
-        }
-        if (delta.z - moved.z).abs() >= f64::from(1.0e-5_f32) {
-            self.velocity.z = -self.velocity.z * 0.0;
-        }
-        let vertical = moved.y != delta.y;
-        if travels_after {
-            if vertical {
-                self.on_ground = false;
-                if delta.y > 0.0 {
-                    self.velocity.y = -self.velocity.y * 0.0;
-                }
-                self.ground_support(&mut scene, moved);
-            }
-        } else {
-            if vertical && delta.y != 0.0 {
-                self.velocity.y = -self.velocity.y * 0.0;
-            }
-            self.on_ground = vertical && delta.y < 0.0;
-            self.ground_support(&mut scene, moved);
-        }
-    }
-    /// `Entity.checkSupportingBlock` after a move by `movement`: the block
-    /// under the feet while `on_ground`, none otherwise.
-    fn ground_support(&mut self, scene: &mut SceneCollisions, movement: Vec3) {
-        let context = horizon_world::collision_context::CollisionContext::for_entity(
-            horizon_world::collision_context::CollisionEntity {
-                identity: horizon_world::entity_obstruction::EntityIdentity(u64::from(self.id)),
-                kind: horizon_world::collision_context::EntityContextKind::Living,
-                y: self.position.y,
-                descending: false,
-                main_hand: Some(horizon_world::collision_context::CollisionItem::EMPTY),
-            },
-            false,
+            travels_after,
+            mover,
+            context,
         );
-        let (position, bounds) = (self.position, self.bounds());
-        let _ = self
-            .support
-            .check_support(self.on_ground, bounds, Some(movement), |area| {
-                horizon_world::ground_support::find_supporting_block(
-                    scene, context, position, area, 1_000_000,
-                )
-            });
     }
     /// `HoneyBlock.entityInside`: side-slide movement after the stand's travel.
     /// `ArmorStand.hasPhysics` / `Entity.isAffectedByBlocks` exclude markers
     /// and NoGravity stands. Slide effects are separate from this movement.
     pub fn apply_honey_slide(&mut self, world: &World, facts: &BlockFacts) {
-        let old_delta_y = |dy: f64| dy / f64::from(0.98_f32) + 0.08;
-        if self.marker || self.no_gravity || self.on_ground || old_delta_y(self.velocity.y) >= -0.08
-        {
+        if self.marker || self.no_gravity {
             return;
         }
-        // Entity.checkInsideBlocks: test the deflated body against block cells,
-        // not their inset collision shape (the stand slides beside that shape).
-        let bounds = self.bounds().deflate(Vec3::new(1e-5, 1e-5, 1e-5));
-        let (lo, hi) = (bounds.min_position(), bounds.max_position());
+        // `0.4375 + getBbWidth() / 2` of the unscaled box.
         let overlap = 0.4375 + if self.small { 0.125 } else { 0.25 };
-        for x in lo.x.floor() as i32..=hi.x.floor() as i32 {
-            for y in lo.y.floor() as i32..=hi.y.floor() as i32 {
-                for z in lo.z.floor() as i32..=hi.z.floor() as i32 {
-                    if &*facts.get(world.block(x, y, z)).name != "minecraft:honey_block"
-                        || self.position.y > f64::from(y) + 0.9375 - 1.0e-7
-                    {
-                        continue;
-                    }
-                    let dx = (f64::from(x) + 0.5 - self.position.x).abs();
-                    let dz = (f64::from(z) + 0.5 - self.position.z).abs();
-                    if dx + 1.0e-7 <= overlap && dz + 1.0e-7 <= overlap {
-                        continue;
-                    }
-                    // HoneyBlock.doSlideMovement, including its float-widened
-                    // getOldDeltaY/getNewDeltaY conversion around air travel.
-                    let old = old_delta_y(self.velocity.y);
-                    if old < -0.13 {
-                        let factor = -0.05 / old;
-                        self.velocity.x *= factor;
-                        self.velocity.z *= factor;
-                    }
-                    self.velocity.y = (-0.05 - 0.08) * f64::from(0.98_f32);
-                    self.enchantment_fall_distance = 0.0;
-                    // The new oldDeltaY is -0.05, so another honey cell cannot slide again.
-                    return;
-                }
-            }
-        }
+        self.living_body().honey_slide(world, facts, overlap);
     }
     /// The rest of the stand's travel: the water slowdown, the lava slowdown
     /// and sink, or the air drag and gravity. The blocks' push (a bubble
     /// column) comes after this, as `LivingEntity.aiStep` applies the block
     /// effects after `travel`.
     pub fn tick_settle(&mut self, medium: StandMedium, step: StandStep) {
+        self.living_body().settle(medium, step);
+    }
+    /// The stand's fields as the living body its movement runs on.
+    fn living_body(&mut self) -> living_body::LivingBodyMut<'_> {
         use crate::entity_rules::EntityRules;
-        let StandStep { falling, friction } = step;
-        let velocity = self.velocity;
-        let gravity = self.get_gravity();
-        self.velocity = if let StandMedium::Lava { shallow } = medium {
-            // travelInLava: halve it (a shallow lava also slows the fall by
-            // 0.8 with `getFluidFallingAdjustedMovement`), then sink by
-            // gravity / 4.
-            let (x, y, z) = if shallow {
-                let y = velocity.y * f64::from(0.8f32);
-                let sink = gravity / 16.0;
-                let adjusted = if falling && (y - 0.005).abs() >= 0.003 && (y - sink).abs() < 0.003
-                {
-                    -0.003
-                } else {
-                    y - sink
-                };
-                (velocity.x * 0.5, adjusted, velocity.z * 0.5)
-            } else {
-                (velocity.x * 0.5, velocity.y * 0.5, velocity.z * 0.5)
-            };
-            Vec3::new(x, y - gravity / 4.0, z)
-        } else if medium == StandMedium::Water {
-            // travelInWater: slowDown 0.8, then `getFluidFallingAdjustedMovement`
-            // with gravity / 16 (the stand is falling while its fall is not
-            // already nearly stopped).
-            let slow = f64::from(0.8f32);
-            let y = velocity.y * slow;
-            let sink = self.get_gravity() / 16.0;
-            let adjusted = if falling && (y - 0.005).abs() >= 0.003 && (y - sink).abs() < 0.003 {
-                -0.003
-            } else {
-                y - sink
-            };
-            Vec3::new(velocity.x * slow, adjusted, velocity.z * slow)
+        // `bounds`' box as corners around the position (`x + -w` is `x - w`
+        // exactly); a marker's is the point itself.
+        let s = if self.small { 0.5 } else { 1.0 } * f64::from(self.scale);
+        let (w, h) = (0.25 * s, f64::from(1.975_f32) * s);
+        let local = if self.marker {
+            [[0.0; 3]; 2]
         } else {
-            let drag = f64::from(friction * 0.91f32);
-            Vec3::new(
-                velocity.x * drag,
-                (velocity.y - self.get_gravity()) * f64::from(0.98f32),
-                velocity.z * drag,
-            )
+            [[-w, 0.0, -w], [w, h, w]]
         };
+        let shape = living_body::BodyShape {
+            kind: "minecraft:armor_stand",
+            local,
+            no_gravity: self.is_no_gravity(),
+            gravity: self.get_gravity(),
+            leather_boots: self.feet_are_leather_boots(),
+        };
+        living_body::LivingBodyMut {
+            id: self.id,
+            position: &mut self.position,
+            velocity: &mut self.velocity,
+            on_ground: &mut self.on_ground,
+            fall_distance: &mut self.enchantment_fall_distance,
+            support: &mut self.support,
+            shape,
+        }
     }
 }
 

@@ -797,6 +797,15 @@ pub trait EntitiesBackendMut {
     #[access(WorldOnly)]
     fn entity_set_bounds(&mut self, entity: EntityRef, min: [f64; 3], max: [f64; 3]) -> bool;
     /// Side: server.
+    /// Sets a general entity row's own fire immunity over its type's
+    /// (`general_entity_fire_immune`, vanilla's `EntityType.fireImmune`): a
+    /// fire-immune row is neither lit nor hurt by fire and lava, and one that
+    /// burns stops. It saves with the row. False, and nothing written, for an
+    /// entity that is not a general row with a living body (`GeneralBody::Living`),
+    /// a stale handle, or on a client.
+    #[access(WorldOnly)]
+    fn entity_set_fire_immune(&mut self, entity: EntityRef, fire_immune: bool) -> bool;
+    /// Side: server.
     /// Moves the entity to `pos` in its level (`Entity.teleportTo`), as
     /// `/tp` does: a player is placed there and told, a rider gets off. With
     /// `rotation` (yaw, pitch in degrees) it also turns. False for a position

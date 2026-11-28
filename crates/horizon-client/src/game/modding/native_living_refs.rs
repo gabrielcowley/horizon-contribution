@@ -113,7 +113,8 @@ fn api_modifier(m: &Modifier) -> Option<AttributeModifier> {
 }
 
 impl Game<'_> {
-    /// What a living handle names now: a player, a mob, an armor stand or the dragon.
+    /// What a living handle names now: a player, a mob, an armor stand, the dragon
+    /// or a general entity row with a living body (`GeneralBody::Living`).
     pub(super) fn native_living_target(&self, living: LivingRef) -> Option<Target> {
         match self.native_entity_target(living.entity())? {
             t @ (Target::Player
@@ -121,8 +122,18 @@ impl Game<'_> {
             | Target::Mob(_)
             | Target::Stand(_)
             | Target::Dragon(_)) => Some(t),
+            Target::General(id) => self.general_living_row(id).map(|_| Target::General(id)),
             _ => None,
         }
+    }
+
+    /// The general row `id` when it has a living body.
+    fn general_living_row(&self, id: u32) -> Option<&super::general::GeneralRow> {
+        self.resident_entities
+            .general
+            .rows
+            .iter()
+            .find(|row| row.id == id && row.living.is_some())
     }
     /// The entity as a living entity (vanilla's `LivingEntity`: a mob, a
     /// player, an armor stand or the dragon), or None for another kind or a
@@ -322,6 +333,9 @@ impl Game<'_> {
                 .map(|m| m.kind.id.as_str()),
             Target::Stand(_) => Some("minecraft:armor_stand"),
             Target::Dragon(_) => Some("minecraft:ender_dragon"),
+            Target::General(id) => self
+                .general_living_row(id)
+                .map(|row| super::general::general_type_catalog().key(row.type_slot)),
             _ => None,
         }
     }
@@ -418,6 +432,13 @@ impl Game<'_> {
                 return d
                     .live
                     .read(catalog, "minecraft:ender_dragon", name, kind, Vec::new);
+            }
+            // A living row wears nothing and takes no effects: its attributes are its
+            // type's declared set, base and value alike.
+            Target::General(id) => {
+                let row = self.general_living_row(id)?;
+                let key = super::general::general_type_catalog().key(row.type_slot);
+                return catalog.entity_row(key)?.get(name).copied();
             }
             _ => return None,
         };
@@ -561,6 +582,10 @@ impl Game<'_> {
                 .as_ref()
                 .filter(|d| d.id == id)
                 .map(|d| d.health),
+            Target::General(id) => self
+                .general_living_row(id)
+                .and_then(|row| row.living.as_ref())
+                .map(|living| living.health),
             _ => None,
         }
     }
@@ -586,6 +611,9 @@ impl Game<'_> {
                 .map(|m| m.attrs.max_health),
             Target::Stand(_) => Some(20.0),
             Target::Dragon(_) => Some(super::dragon::MAX_HEALTH),
+            Target::General(id) => self
+                .general_living_row(id)
+                .map(|row| self.general_max_health(row.type_slot)),
             _ => None,
         }
     }
@@ -643,6 +671,24 @@ impl Game<'_> {
                     m.death_time = 0;
                     self.died.remove(&id);
                 }
+                true
+            }
+            Some(Target::General(id)) => {
+                let Some(i) = self
+                    .resident_entities
+                    .general
+                    .rows
+                    .iter()
+                    .position(|row| row.id == id && row.living.is_some())
+                else {
+                    return false;
+                };
+                let max = self.general_max_health(self.resident_entities.general.rows[i].type_slot);
+                self.resident_entities.general.rows.update(i, |row| {
+                    if let Some(living) = row.living.as_deref_mut() {
+                        living.health = health.clamp(0.0, max);
+                    }
+                });
                 true
             }
             _ => false,
@@ -805,6 +851,7 @@ impl Game<'_> {
                 .equipment
                 .get(slot as usize)
                 .cloned(),
+            Target::General(id) => self.general_slot_item(id, slot),
             _ => None,
         }
     }
@@ -1072,6 +1119,9 @@ impl Game<'_> {
         let Some(t) = self.native_living_target(living) else {
             return false;
         };
+        if let Target::General(id) = t {
+            return self.general_set_slot_item(id, slot, stack);
+        }
         let stack = equipment_stack(stack);
         let equippable = stack.as_ref().and_then(|s| self.equippable_slot_sound(s));
         let hook_stack = stack.clone();
@@ -3152,3 +3202,67 @@ mod set_tamed_tests {
     }
 }
 
+impl Game<'_> {
+    /// `LivingEntity.getItemBySlot` of living row `id`: its type's
+    /// `general_slot_item`, else vanilla's empty slot.
+    fn general_slot_item(&self, id: u32, slot: EquipmentSlot) -> Option<ItemStack> {
+        use super::api_values::TryIntoEngine;
+        let row = self.general_living_row(id)?;
+        let kind = super::general::general_type_catalog().key(row.type_slot);
+        if !super::general::living::general_moment_hooked(
+            mod_api::HookId::GeneralSlotItem,
+            "general_slot_item",
+            kind,
+        ) {
+            return None;
+        }
+        let epoch = self.native_lifecycle.epoch()?;
+        let mut item = None;
+        self.native_general_slot_item(kind, EntityRef::new(epoch, id), slot, &mut item);
+        item?
+            .try_into_engine(self.items())
+            .ok()
+            .filter(|s| s.count > 0)
+    }
+
+    /// `LivingEntity.setItemSlot` of living row `id`: its type's
+    /// `general_set_slot_item`, else vanilla's refusal (a row keeps no slots).
+    fn general_set_slot_item(
+        &mut self,
+        id: u32,
+        slot: EquipmentSlot,
+        stack: Option<ItemStack>,
+    ) -> bool {
+        use super::api_values::TryIntoApi;
+        let Some(row) = self.general_living_row(id) else {
+            return false;
+        };
+        let kind = super::general::general_type_catalog().key(row.type_slot);
+        if !super::general::living::general_moment_hooked(
+            mod_api::HookId::GeneralSetSlotItem,
+            "general_set_slot_item",
+            kind,
+        ) {
+            return false;
+        }
+        let Some(epoch) = self.native_lifecycle.epoch() else {
+            return false;
+        };
+        let stack = match stack.filter(|stack| stack.count > 0) {
+            Some(stack) => match stack.try_into_api() {
+                Ok(api) => Some(api),
+                Err(_) => return false,
+            },
+            None => None,
+        };
+        let mut accepted = None;
+        self.native_general_set_slot_item(
+            kind,
+            EntityRef::new(epoch, id),
+            slot,
+            stack.as_ref(),
+            &mut accepted,
+        );
+        accepted.unwrap_or(false)
+    }
+}

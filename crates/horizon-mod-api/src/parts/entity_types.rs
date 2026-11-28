@@ -70,6 +70,8 @@ impl GeneralTypesRegistrar for PartRegistrar {
                     tracking_chunks,
                     update_interval,
                     sends_velocity: true,
+                    body: GeneralBody::None,
+                    fire_immune: false,
                     payload_version,
                     required_features: required_features.iter().map(|&f| f.to_owned()).collect(),
                 });
@@ -89,27 +91,62 @@ impl GeneralTypesRegistrar for PartRegistrar {
         path: &str,
         sends_velocity: bool,
     ) -> Result<(), GeneralEntityRegistrationError> {
+        let declared = self.declared_general_type(path, "velocity updates")?;
+        declared.sends_velocity = sends_velocity;
+        Ok(())
+    }
+
+    fn general_entity_body(
+        &mut self,
+        path: &str,
+        body: GeneralBody,
+    ) -> Result<(), GeneralEntityRegistrationError> {
+        let declared = self.declared_general_type(path, "body")?;
+        declared.body = body;
+        Ok(())
+    }
+
+    fn general_entity_fire_immune(
+        &mut self,
+        path: &str,
+        fire_immune: bool,
+    ) -> Result<(), GeneralEntityRegistrationError> {
+        let declared = self.declared_general_type(path, "fire immunity")?;
+        declared.fire_immune = fire_immune;
+        Ok(())
+    }
+}
+
+impl PartRegistrar {
+    /// The declaration of the mod's own general type `path`, for a call that
+    /// sets its `what` after `declare_general_entity`: refused with `Frozen`
+    /// after the registry froze and `InvalidId` for a type this mod did not
+    /// declare, each naming the mod.
+    fn declared_general_type(
+        &mut self,
+        path: &str,
+        what: &str,
+    ) -> Result<&mut GeneralEntityTypeDeclaration, GeneralEntityRegistrationError> {
         use GeneralEntityRegistrationError as Error;
         if crate::__private::current_phase() != crate::__private::ModPhase::Registration {
             self.refused.push(format!(
-                "mod {} sets a general entity type's velocity updates after the registry froze",
+                "mod {} sets a general entity type's {what} after the registry froze",
                 self.mod_id
             ));
             return Err(Error::Frozen);
         }
-        let declared = self
-            .owned_declaration_id(path)
-            .ok()
-            .and_then(|id| self.general_entity_types.iter_mut().find(|d| d.id == id));
-        let Some(declared) = declared else {
+        let id = self.owned_declaration_id(path).ok();
+        let found = id
+            .as_ref()
+            .and_then(|id| self.general_entity_types.iter().position(|d| &d.id == id));
+        let Some(index) = found else {
             self.refused.push(format!(
-                "mod {} sets velocity updates of {path:?}, a general entity type it did not declare",
+                "mod {} sets the {what} of {path:?}, a general entity type it did not declare",
                 self.mod_id
             ));
             return Err(Error::InvalidId);
         };
-        declared.sends_velocity = sends_velocity;
-        Ok(())
+        Ok(&mut self.general_entity_types[index])
     }
 }
 

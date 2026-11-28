@@ -44,6 +44,7 @@ impl Game<'_> {
             needs_sync: false,
             age: 0,
             attachment_lifetime: Default::default(),
+            living: None,
         });
         // The box and the rest of its attachments follow the add packet; a
         // row that had them under this id before keeps none of them.

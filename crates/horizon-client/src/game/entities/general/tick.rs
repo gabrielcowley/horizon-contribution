@@ -108,6 +108,11 @@ impl Game<'_> {
                     {
                         self.dispatch_general_tick(kind, epoch, id);
                     }
+                    // A living body's own tick runs after the type's lines, as
+                    // `super.tick()` follows a subclass's (`GeneralBody::Living`).
+                    if general_row_live(self, index, mount) {
+                        self.tick_general_living(index);
+                    }
                     if round.listening() {
                         self.native_tick_post_one(&round, id, kind);
                     }

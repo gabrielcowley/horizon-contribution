@@ -1,0 +1,8 @@
+# General entity rows with a living body: the armor stand's movement, living damage and the type-scoped moments (gap/general-entity-bodies).
+horizon-client game::general::living_tests::a_crate_and_a_zombie_push_each_other_apart lib daily resources
+horizon-client game::general::living_tests::a_crate_under_water_drowns_on_its_320th_tick lib daily resources
+horizon-client game::general::living_tests::a_living_crate_falls_as_a_stand_and_rests_at_its_speed lib daily resources
+horizon-client game::general::living_tests::crates_stack_only_when_their_type_collides_with_them lib daily resources
+horizon-client game::general::living_tests::fire_lights_and_hurts_a_crate_unless_it_is_fire_immune lib daily resources
+horizon-client game::general::living_tests::inside_block_tells_at_end_only_for_the_final_box lib daily resources
+horizon-client game::general::living_tests::kill_and_the_void_reach_the_crates_own_hurt lib daily resources

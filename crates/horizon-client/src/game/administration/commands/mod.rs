@@ -2201,8 +2201,11 @@ impl Game<'_> {
             });
         }
         match t {
-            // Stage 3's insertion joins live rows; there is nothing to kill.
-            Target::General(_) => {}
+            // `LivingEntity.kill` hurts a living row with `generic_kill`; a row
+            // without a body is not killed here.
+            Target::General(id) => {
+                self.kill_general_living(id);
+            }
             Target::Guest(_) => {
                 self.for_player(t, |g| g.kill_target(Target::Player));
             }
