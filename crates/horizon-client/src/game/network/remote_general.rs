@@ -68,9 +68,10 @@ impl Game<'_> {
         &mut self,
         removed: &horizon_client::fast_hash::FxHashSet<u32>,
     ) {
-        let rows = &mut self.resident_entities.general.rows;
-        if !rows.is_empty() {
-            rows.retain(|row| !removed.contains(&row.id));
+        let general = &mut self.resident_entities.general;
+        if !general.rows.is_empty() {
+            general.rows.retain(|row| !removed.contains(&row.id));
+            general.rider_places.retain(|id, _| !removed.contains(id));
         }
     }
 

@@ -65,6 +65,17 @@ pub(crate) fn native_only_hook(name: &str) -> Option<&'static str> {
         "general_entity_tick" => Some(
             "general_entity_tick: general entity ticks are not yet available to wasm mods (the wasm adapter is #792's stage 4b)",
         ),
+        // The rider moments of general vehicles are native-first with the
+        // tick; a wasm vehicle's riders take the defaults until stage 4b.
+        "general_rider_placement" => Some(
+            "general_rider_placement: general entity rider placement is not yet available to wasm mods (the wasm adapter is #792's stage 4b)",
+        ),
+        "general_dismount_location" => Some(
+            "general_dismount_location: general entity dismount locations are not yet available to wasm mods (the wasm adapter is #792's stage 4b)",
+        ),
+        "general_passenger_removed" => Some(
+            "general_passenger_removed: general entity passenger removal is not yet available to wasm mods (the wasm adapter is #792's stage 4b)",
+        ),
         _ => None,
     }
 }

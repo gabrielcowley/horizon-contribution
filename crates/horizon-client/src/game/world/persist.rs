@@ -1415,6 +1415,16 @@ impl Game<'_> {
     /// `Entity.getVehicle` of entity `id`: the mob, boat or minecart a mob
     /// rides (only a mob rides another entity here).
     fn vehicle_of(&self, id: u32) -> Option<u32> {
+        // A general row rides the row its mount link names.
+        if let Some(row) = self
+            .resident_entities
+            .general
+            .rows
+            .iter()
+            .find(|row| row.id == id)
+        {
+            return row.mount.filter(|&vehicle| self.is_general_row(vehicle));
+        }
         // A mob rider: its mount, when the vehicle is still an object of the level (the
         // object memory also holds riders refused residency).
         if let Some(mob) = self.mob_object(id) {
@@ -1465,6 +1475,13 @@ impl Game<'_> {
             write_attachments(&mut tag, root, &self.entity_attachments);
             return Some(tag);
         }
+        // A general row, with the general rows riding it.
+        if self.is_general_row(root) {
+            let mut tag = self.general_tree_tag(root)?;
+            // The root's own attachments (its box among them), as `save_lists!` writes them.
+            write_attachments(&mut tag, root, &self.entity_attachments);
+            return Some(tag);
+        }
         // Any other kind of root vehicle, with its passengers.
         self.saved_passenger_body(root)
     }
@@ -1512,6 +1529,29 @@ impl Game<'_> {
         }
         self.boats.retain(|b| !gone.contains(&b.id));
         self.carts.retain(|c| !gone.contains(&c.id));
+        // A general root and the general rows riding it, at any depth.
+        if self.is_general_row(root) {
+            let rows = &self.resident_entities.general.rows;
+            let mut tree = vec![root];
+            let mut grew = true;
+            while grew {
+                grew = false;
+                for row in rows.iter() {
+                    if row.mount.is_some_and(|v| tree.contains(&v)) && !tree.contains(&row.id) {
+                        tree.push(row.id);
+                        grew = true;
+                    }
+                }
+            }
+            let general = &mut self.resident_entities.general;
+            general.rows.retain(|row| !tree.contains(&row.id));
+            general.rider_places.retain(|id, _| !tree.contains(id));
+            for id in tree {
+                if !gone.contains(&id) {
+                    gone.push(id);
+                }
+            }
+        }
         // Entities of the other kinds, the slots and the links of the whole tree.
         self.discard_passenger_entities(&gone);
         for g in gone {
@@ -1533,6 +1573,7 @@ impl Game<'_> {
                             self.dim.key(),
                             super::commands::Target::Cart(id),
                         ))
+                    || self.is_general_row(id)
                     // A vehicle of another kind (an armor stand, a display...).
                     || (!(self.mobs.iter().any(|mob| mob.id == id)
                         || self.boats.iter().any(|boat| boat.id == id)

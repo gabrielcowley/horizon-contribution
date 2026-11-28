@@ -10,6 +10,16 @@ use horizon_client::{
 };
 use mod_api::{EntityRef, LeashHolder, LivingRef};
 
+/// A general row's box width and height.
+fn general_row_size(row: &crate::game::general::GeneralRow) -> (f64, f64) {
+    use crate::game::entity::Entity;
+    let bounds = row.bounds();
+    (
+        bounds.max_position().x - bounds.min_position().x,
+        bounds.max_position().y - bounds.min_position().y,
+    )
+}
+
 impl Game<'_> {
     /// The dismount search with a vehicle or passenger lent out of `self.mobs`.
     pub(super) fn scoped_mob_dismount_location(
@@ -124,14 +134,27 @@ impl Game<'_> {
     pub(super) fn native_root_vehicle_id(&self, id: u32, target: Target) -> Option<u32> {
         let mut root = id;
         let mut next = self.native_vehicle_id(target);
-        for _ in 0..=self.mobs.len() + self.persist.off_level.len() + 1 {
+        for _ in 0..=self.mobs.len()
+            + self.persist.off_level.len()
+            + self.resident_entities.general.rows.len()
+            + 1
+        {
             let Some(vehicle) = next else {
                 return Some(root);
             };
             root = vehicle;
-            next = self.native_vehicle_id(Target::Mob(vehicle));
+            next = self.native_vehicle_id(self.vehicle_link_target(vehicle));
         }
         None
+    }
+    /// The target whose mount link continues a vehicle chain at `id`: a
+    /// general row rides by its row's link, anything else by a mob's.
+    fn vehicle_link_target(&self, id: u32) -> Target {
+        if self.is_general_row(id) {
+            Target::General(id)
+        } else {
+            Target::Mob(id)
+        }
     }
     /// A live portal root carries a direct or indirect mount through complete objects.
     pub(super) fn vehicle_tree_contains_mount(&self, root: u32, mount: u32) -> bool {
@@ -440,6 +463,8 @@ impl Game<'_> {
         let allowed = match rider {
             Target::Player => self.native_may_board(vehicle_id),
             Target::Mob(id) => self.native_mob_may_ride(id, vehicle_id, true),
+            // A general row has no `mob_ride` of its own to ask.
+            Target::General(_) => true,
             _ => false,
         };
         if !allowed
@@ -466,6 +491,12 @@ impl Game<'_> {
                     } else {
                         self.dismount_mob(id);
                     }
+                }
+                Target::General(id) => {
+                    let Some(entity) = self.entity(id) else {
+                        return false;
+                    };
+                    self.entity_stop_riding(entity);
                 }
                 _ => return false,
             }
@@ -494,10 +525,12 @@ impl Game<'_> {
                         self.mount.jump_ticks = 0;
                         self.mount.jump_scale = 0.0;
                     }
-                    Target::Stand(id) | Target::Other(id) => {
+                    Target::Stand(id) | Target::Other(id) | Target::General(id) => {
                         let Some(seat) = self.seat(id) else {
                             return false;
                         };
+                        // A general vehicle's parts place the rider before it sits.
+                        self.seat_general_rider(id, self.own_entity_id() as u32);
                         self.board_seat(id, seat);
                         return self.native_vehicle_id(rider) == Some(vehicle_id);
                     }
@@ -510,8 +543,22 @@ impl Game<'_> {
             Target::Mob(id) => {
                 horizon_client::mobs::riders::link(&mut self.mobs, id, vehicle_id);
                 self.seat_mob(id);
+                self.seat_general_rider(vehicle_id, id);
                 // `Mob.startRiding`: `dropLeash()`, before the rider is seated.
                 self.break_leash(id, true, false);
+            }
+            // A general row rides by its mount link, placed at once.
+            Target::General(id) => {
+                let general = &mut self.resident_entities.general;
+                let Some(index) = general.rows.iter().position(|row| row.id == id) else {
+                    return false;
+                };
+                general
+                    .rows
+                    .update(index, |row| row.mount = Some(vehicle_id));
+                general.mount_writes += 1;
+                self.seat_general_rider(vehicle_id, id);
+                self.position_general_rider(index);
             }
             _ => return false,
         }
@@ -530,12 +577,15 @@ impl Game<'_> {
             | Target::Boat(id)
             | Target::Cart(id)
             | Target::Stand(id)
-            | Target::Other(id) => id,
+            | Target::Other(id)
+            | Target::General(id) => id,
             _ => return None,
         };
         if self.entity(vehicle_id).is_none()
             || matches!(rider, Target::Mob(id) if self.mobs.iter().all(|m| m.id != id || m.removed))
-            || !matches!(rider, Target::Player | Target::Mob(_))
+            // A general row rides only another general row.
+            || !(matches!(rider, Target::Player | Target::Mob(_))
+                || matches!((rider, vehicle), (Target::General(_), Target::General(_))))
             || rider == vehicle
             || self.native_vehicle_id(rider) == Some(vehicle_id)
         {
@@ -543,15 +593,32 @@ impl Game<'_> {
         }
         // Intermediate vehicles can be retained objects, not ordinary handles.
         let mut current = Some(vehicle_id);
-        for _ in 0..=self.mobs.len() + self.persist.off_level.len() + 1 {
+        for _ in 0..=self.mobs.len()
+            + self.persist.off_level.len()
+            + self.resident_entities.general.rows.len()
+            + 1
+        {
             let Some(id) = current else { break };
-            if rider == Target::Mob(id) {
+            if rider == Target::Mob(id) || rider == Target::General(id) {
                 return None;
             }
-            current = self.native_vehicle_id(Target::Mob(id));
+            current = self.native_vehicle_id(self.vehicle_link_target(id));
         }
         if current.is_some() {
             return None;
+        }
+        // A general vehicle's tree is at most `MAX_PASSENGER_DEPTH` riders deep,
+        // the bound its saved record keeps.
+        if matches!(vehicle, Target::General(_)) {
+            let mut depth = 1;
+            let mut below = self.native_vehicle_id(Target::General(vehicle_id));
+            while let Some(id) = below.filter(|&id| self.is_general_row(id)) {
+                depth += 1;
+                if depth >= mod_api::general_entity_limits::MAX_PASSENGER_DEPTH {
+                    return None;
+                }
+                below = self.native_vehicle_id(Target::General(id));
+            }
         }
         if !force {
             match rider {
@@ -604,7 +671,9 @@ impl Game<'_> {
                     return None;
                 }
             }
-            Target::Stand(id) | Target::Other(id) => {
+            // A general row takes one passenger unless forced, as vanilla's
+            // `Entity.canAddPassenger` (`getPassengers().isEmpty()`).
+            Target::Stand(id) | Target::Other(id) | Target::General(id) => {
                 if self.seat(id).is_none() || (!force && !self.seated_passengers(id).is_empty()) {
                     return None;
                 }
@@ -660,17 +729,35 @@ impl Game<'_> {
             // The mount rewrite also retires the rows' rider index, which
             // the list's own write stamp does not see.
             Target::General(id) => {
-                let Some(row) = self
+                let Some(index) = self
                     .resident_entities
                     .general
                     .rows
-                    .iter_mut()
-                    .find(|row| row.id == id)
+                    .iter()
+                    .position(|row| row.id == id)
                 else {
                     return false;
                 };
-                row.mount = None;
+                // `LivingEntity.dismountVehicle`'s spot off a general
+                // vehicle, asked while the rider still rides it.
+                let at = if self.is_general_row(vehicle) {
+                    let row = &self.resident_entities.general.rows[index];
+                    let bounds = general_row_size(row);
+                    self.general_dismount_point(vehicle, id, row.position, bounds.0, bounds.1)
+                } else {
+                    None
+                };
+                let reason = self.general_removal_reason(vehicle);
+                let rows = &mut self.resident_entities.general.rows;
+                rows.update(index, |row| {
+                    row.mount = None;
+                    if let Some(at) = at {
+                        row.position = at;
+                        row.previous = at;
+                    }
+                });
                 self.resident_entities.general.mount_writes += 1;
+                self.general_rider_left(vehicle, id, reason);
             }
             _ => return false,
         }

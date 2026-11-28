@@ -385,6 +385,26 @@ impl Game<'_> {
                 i.vehicle = None;
             }
         }
+        // A client's general rows ride by their mount links, as the server's do.
+        let general = &mut self.resident_entities.general;
+        let mut remounted = false;
+        for i in 0..general.rows.len() {
+            let (id, mount) = (general.rows[i].id, general.rows[i].mount);
+            let next = if riders.contains(&(id as i32)) {
+                Some(vehicle_id)
+            } else if mount == Some(vehicle_id) {
+                None
+            } else {
+                continue;
+            };
+            if next != mount {
+                general.rows.update(i, |row| row.mount = next);
+                remounted = true;
+            }
+        }
+        if remounted {
+            general.mount_writes += 1;
+        }
         let aboard = riders.contains(&me);
         if aboard
             && let Some(r) = self.remote.as_mut()
@@ -498,6 +518,34 @@ impl Game<'_> {
             self.position_rider();
             self.rider_flight_toggle(keys.jump);
             return Ok(true);
+        }
+        // A general row seats the player where its placement says, the one
+        // the server kept for this player or vanilla's default.
+        if self.is_general_row(id) {
+            let me = self.own_entity_id() as u32;
+            if let Some(p) = self.player.as_ref() {
+                let scale = f64::from(p.dimensions.width)
+                    / f64::from(horizon_client::pose::Pose::Standing.dimensions(1.0).width);
+                let attachment = 0.6 * scale;
+                if let (Some(seat), Some(before)) = (
+                    self.general_rider_seat(id, me, attachment),
+                    self.general_rider_previous_seat(id, me, attachment),
+                ) {
+                    self.previous_position = if self.posed_rider != self.riding {
+                        seat
+                    } else {
+                        before
+                    };
+                    self.posed_rider = self.riding;
+                    if let Some(p) = self.player.as_mut() {
+                        p.position = seat;
+                        p.velocity = Vec3::ZERO;
+                        p.fall_distance = 0.0;
+                    }
+                    self.rider_flight_toggle(keys.jump);
+                    return Ok(true);
+                }
+            }
         }
         // Generic entities are valid vehicles too (plugins use displays as seats).
         // Keep riding set so sendChanges sends rotation, never a walking position.

@@ -70,6 +70,24 @@ impl Game<'_> {
                 .filter(|m| m.extra.mount == Some(vehicle) && !m.removed)
                 .map(|m| (m.extra.vehicle_order, m.id, false)),
         );
+        // General rows ride by their mount links, after the others in the
+        // order their tree loaded or they boarded; one queued for removal
+        // rides nothing.
+        let general = &self.resident_entities.general.rows;
+        if !general.is_empty() {
+            seats.extend(
+                general
+                    .iter()
+                    .filter(|row| {
+                        row.mount == Some(vehicle)
+                            && !self
+                                .persist
+                                .removals
+                                .contains(&super::commands::Target::General(row.id))
+                    })
+                    .map(|row| (i64::MAX, row.id, false)),
+            );
+        }
         seats.sort_by_key(|&(place, ..)| place);
         seats
     }

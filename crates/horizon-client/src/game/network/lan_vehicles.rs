@@ -426,7 +426,15 @@ impl Game<'_> {
                     .find(|c| c.id == vehicle)
                     .map(|c| (c.position, c.seat()))
             })
-            .or_else(|| self.seat(vehicle).map(|s| (s.position, s.player_seat())));
+            .or_else(|| {
+                let seat = self.seat(vehicle)?;
+                // A general row's kept placement for this guest, if any.
+                let guest = self.lan.as_ref()?.hub.guests[gi].entity_id as u32;
+                let at = self
+                    .general_rider_seat(vehicle, guest, 0.6)
+                    .unwrap_or_else(|| seat.player_seat());
+                Some((seat.position, at))
+            });
         if let Some((p, seat)) = at {
             let Some(host) = self.lan.as_mut() else {
                 return;

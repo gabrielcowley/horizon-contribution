@@ -5,6 +5,7 @@ pub(crate) mod attachment_query;
 pub(crate) mod chunk_areas;
 pub(crate) mod entity_reach;
 pub(crate) mod entity_visibility;
+pub(crate) mod general_riders;
 pub(crate) mod mob_ai_pause;
 pub(crate) mod player_connect;
 pub(crate) mod player_data;

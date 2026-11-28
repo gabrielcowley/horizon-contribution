@@ -372,3 +372,137 @@ fn a_client_row_follows_the_packets_and_its_synced_box() {
         });
     });
 }
+
+/// Riders (`gap/general-entity-sync`, riders): a late tracker of a general vehicle gets its
+/// rider in the passengers packet and the rider's kept place in the vehicle's attachment
+/// snapshot, in the flush that adds them.
+#[test]
+#[ignore = "daily"]
+fn a_tracker_gets_a_general_vehicles_passengers_and_their_places() {
+    with_declared(|| {
+        let mut resources = None;
+        let mut game = crate::game::game_tests::tests::server_game(&mut resources);
+        game.build_registries();
+        let _world = world_phase();
+        game.options.dedicated = Some(Vec::new());
+        game.next_entity = game.next_entity.max(100);
+        let dimension = game.dim.id().to_owned();
+        let vehicle = game
+            .spawn_general(&dimension, KIND, [8.5, 80.0, 8.5], [0.0, 0.0], None)
+            .unwrap();
+        let rider = game
+            .spawn_general(&dimension, KIND, [9.5, 80.0, 8.5], [0.0, 0.0], None)
+            .unwrap();
+        assert!(game.entity_start_riding(rider, vehicle, false));
+        // No part: the declared 0.5-tall box's passenger point.
+        let seated = game.resident_entities.general.rows[1].position;
+        assert!((seated.y - 80.5).abs() < 1e-9 && (seated.x - 8.5).abs() < 1e-9);
+
+        let rx = crate::game::lan::mob_swing_sync_tests::guest_at(&mut game, [8.5, 80.0, 8.5]);
+        game.lan.as_mut().unwrap().hub.guests.update(0, |guest| {
+            guest.sent_chunks.insert((0, 0));
+            guest.watched.insert((0, 0));
+            guest.loaded = true;
+        });
+        let mut packets = Vec::new();
+        for _ in 0..5 {
+            game.tick_lan(false);
+            packets.extend(sent(&rx));
+        }
+        assert!(
+            packets.iter().any(|p| matches!(
+                p,
+                C::SetPassengers(p) if p.vehicle == vehicle.id() as i32
+                    && p.passengers == vec![rider.id() as i32]
+            )),
+            "the vehicle's passengers are sent"
+        );
+        let snapshot = game.attachment_snapshot(Holder::Entity(vehicle.id()));
+        assert!(
+            snapshot
+                .iter()
+                .flat_map(|m| &m.changes)
+                .any(|c| c.namespace.to_string_lossy() == "horizon"
+                    && c.name.to_string_lossy() == "rider_places"),
+            "the rider's place is in the vehicle's snapshot"
+        );
+    });
+}
+
+/// A client seats a general row on its general vehicle from the passengers packet and the
+/// vehicle's synced rider places: at the vehicle's position plus the kept offsets, turned by the
+/// vehicle's yaw.
+#[test]
+#[ignore = "daily"]
+fn a_client_seats_a_general_rider_where_the_server_placed_it() {
+    with_declared(|| {
+        with_client(|game| {
+            let kind = game
+                .remote
+                .as_ref()
+                .unwrap()
+                .builtin
+                .get("minecraft:entity_type")
+                .unwrap()
+                .id(KIND)
+                .unwrap();
+            for (id, x) in [(40, 0.5), (41, 5.5)] {
+                game.handle_packet(C::AddEntity(play::AddEntity {
+                    id,
+                    uuid: id as u128,
+                    kind,
+                    position: [x, 64.0, 0.5],
+                    velocity: [0.0; 3],
+                    pitch: 0,
+                    yaw: 0,
+                    head_yaw: 0,
+                    data: 0,
+                }))
+                .unwrap();
+            }
+            game.handle_packet(C::SetPassengers(play::SetPassengers {
+                vehicle: 40,
+                passengers: vec![41],
+            }))
+            .unwrap();
+            let doubles = |v: [f64; 3]| Tag::List(v.map(|v| Tag::Double(v.to_bits())).to_vec());
+            let mut place = Compound::new();
+            place.insert("Rider".into(), Tag::Int(41));
+            place.insert("Asked".into(), doubles([0.5, 0.5, 0.0]));
+            place.insert("Local".into(), doubles([0.0, 1.0, 0.5]));
+            place.insert("World".into(), doubles([0.0, -0.25, 0.0]));
+            let mut value = Compound::new();
+            value.insert("Places".into(), Tag::List(vec![Tag::Compound(place)]));
+            let message = horizon_protocol::attachment_sync::Message {
+                holder: Holder::Entity(40),
+                replace: true,
+                changes: vec![horizon_mod_runtime::attachments::AttachmentSync {
+                    namespace: "horizon".into(),
+                    name: "rider_places".into(),
+                    value: Some(value),
+                }],
+            };
+            game.remote_attachment_sync(
+                &horizon_protocol::attachment_sync::encode(&message).unwrap(),
+            );
+            game.tick_remote_entities(true);
+            let rider = game
+                .resident_entities
+                .general
+                .rows
+                .iter()
+                .find(|row| row.id == 41)
+                .unwrap()
+                .position;
+            // Yaw 0: the local +z stays +z.
+            assert!(
+                (rider.x - 0.5).abs() < 1e-9
+                    && (rider.y - 64.75).abs() < 1e-9
+                    && (rider.z - 1.0).abs() < 1e-9,
+                "at {rider:?}"
+            );
+            let rider = game.entity(41).unwrap();
+            assert_eq!(game.entity_vehicle(rider).map(|v| v.id()), Some(40));
+        });
+    });
+}

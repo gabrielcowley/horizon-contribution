@@ -195,6 +195,18 @@ impl Game<'_> {
                 riding.add(vehicle as i32, rider as i32);
             }
         }
+        // General rows riding general rows, by their mount links in join
+        // order (players and mobs on a general row are listed above).
+        for row in self.resident_entities.general.rows.iter() {
+            if let Some(vehicle) = row.mount
+                && !self
+                    .persist
+                    .removals
+                    .contains(&super::commands::Target::General(row.id))
+            {
+                riding.add(vehicle as i32, row.id as i32);
+            }
+        }
         for (&vehicle, pass) in &mut riding.passengers {
             // Players occupy the leading seats, as in `position_riders`.
             // `extra.rider` orders mob passengers, not a player's driver seat.

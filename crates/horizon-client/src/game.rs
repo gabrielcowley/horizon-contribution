@@ -4671,6 +4671,9 @@ impl Game<'_> {
             // general rows (arismoko/horizon#792), then the mobile kinds' remainder.
             self.ordered_before(ordered_tick::Batch::General)?;
             horizon_client::spans::time("tick_general", || self.tick_general())?;
+            // Riders of general vehicles keep places asked with their
+            // present boxes; a rider gone without getting off is let go.
+            span("general_seating", || self.reconcile_general_seating());
             // Orbs, primed TNT and falling blocks still to tick, in join order.
             self.run_ordered_ticks(horizon_client::join_seq::JoinSeq::MAX, false)?;
             horizon_client::spans::time("tick_experience", || self.tick_experience());

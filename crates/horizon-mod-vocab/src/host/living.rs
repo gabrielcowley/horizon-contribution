@@ -444,6 +444,15 @@ pub trait LivingBackendMut {
     #[access(WorldOnly)]
     fn living_set_tamed(&mut self, living: LivingRef, tamed: bool) -> bool;
     /// Side: server.
+    /// `TamableAnimal.setInSittingPose`: sets whether a tamable animal (a wolf,
+    /// cat or parrot) is drawn and treated as sitting, without changing its
+    /// owner's order to sit (`isOrderedToSit`), as a seat does to an animal it
+    /// takes and undoes when the animal gets off. The sit goal writes the
+    /// pose again on its next run when the order says otherwise. False for a
+    /// kind that is not a `TamableAnimal`, a player or a stale handle.
+    #[access(WorldOnly)]
+    fn living_set_in_sitting_pose(&mut self, living: LivingRef, sitting: bool) -> bool;
+    /// Side: server.
     /// Sets the entity's health (`LivingEntity.setHealth`; Paper's
     /// `Damageable#setHealth`), cut to its maximum health. No heal or damage
     /// hook runs. False for a stale handle, a non-finite value, an armor stand

@@ -132,7 +132,11 @@ impl Game<'_> {
     pub(super) fn passenger_creatable(&self, tag: &Tag) -> bool {
         entity_nbt::kind(tag).is_some_and(|kind| {
             kind != "minecraft:player"
-                && (self.entity_type_exists(&kind) || self.res.mob_types().contains_key(&kind))
+                && (self.entity_type_exists(&kind)
+                    || self.res.mob_types().contains_key(&kind)
+                    || crate::game::general::general_type_catalog()
+                        .slot(&kind)
+                        .is_some())
         })
     }
 

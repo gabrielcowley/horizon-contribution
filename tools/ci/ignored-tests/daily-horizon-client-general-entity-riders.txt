@@ -1,0 +1,9 @@
+# General entity rows as vehicles: rider placement, dismount and passenger removal (gap/general-entity-sync, riders).
+horizon-client game::general::riders_tests::a_changed_or_gone_rider_is_asked_again_or_let_go lib daily resources
+horizon-client game::general::riders_tests::a_general_vehicle_round_trips_through_root_vehicle lib daily resources
+horizon-client game::general::riders_tests::a_mob_sits_and_gets_off_where_the_seat_says lib daily resources
+horizon-client game::general::riders_tests::a_mount_onto_a_row_spawned_in_the_same_transaction_follows_its_join lib daily resources
+horizon-client game::general::riders_tests::a_removed_vehicle_lets_its_rider_off_where_it_is lib daily resources
+horizon-client game::general::riders_tests::a_vehicle_without_a_part_uses_vanillas_defaults lib daily resources
+horizon-client game::general_sync_tests::a_client_seats_a_general_rider_where_the_server_placed_it lib daily resources
+horizon-client game::general_sync_tests::a_tracker_gets_a_general_vehicles_passengers_and_their_places lib daily resources
