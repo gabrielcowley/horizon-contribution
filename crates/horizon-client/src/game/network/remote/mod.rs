@@ -2180,6 +2180,27 @@ impl ClientMenu {
 }
 
 impl Remote {
+    /// `Entity.lerpTo` with its own step count: entity `id` eases toward `target` and `rotation`
+    /// (yRot, xRot) over `steps` ticks, in place of the ease in progress.
+    pub(super) fn lerp_to(&mut self, id: i32, target: [f64; 3], rotation: [f32; 2], steps: u32) {
+        self.lerps.insert(
+            id,
+            Lerp {
+                target,
+                rotation: Some((rotation[0], rotation[1])),
+                steps,
+            },
+        );
+    }
+
+    /// The ease in progress of entity `id`: its target and the ticks left (`lerpSteps`).
+    pub(super) fn lerp_target(&self, id: i32) -> Option<([f64; 3], u32)> {
+        self.lerps
+            .get(&id)
+            .filter(|l| l.steps > 0)
+            .map(|l| (l.target, l.steps))
+    }
+
     pub(super) fn set_menu_title(&mut self, title: Option<horizon_client::text::Text>) {
         self.menu_title_snapshot = title.try_into_api().ok().flatten().map(Arc::new);
         self.menu_title = title;

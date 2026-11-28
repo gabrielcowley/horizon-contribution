@@ -123,6 +123,38 @@ A general type may also have the round shadow drawn under its entities, in block
 beside the renderer with `registry.shadow_radius("mymod:crate".into(), 0.5)` (vanilla's
 `shadowRadius`; 0, no shadow, by default).
 
+### Smoothing a general entity on the client
+
+The server moves a general entity, and each client eases its copy toward the pose the server sent
+over three ticks. A part attached to the type can do more on the client, as vanilla's client
+`Entity.tick` and `travel` do: `general_entity_client_tick` runs once per client tick for each
+copy, after that step. Native mods only, for now: wasm types keep vanilla's easing.
+
+```rust,ignore
+#[horizon_part]
+impl EntityPart for Crate {
+    fn general_entity_client_tick(
+        &self,
+        host: &mut dyn ClientHost,
+        event: &mut GeneralEntityClientTickEvent<'_>,
+    ) {
+        let entity = event.entity;
+        let Some(motion) = entity.velocity(host) else { return };
+        // Predict one step against the blocks, as `Entity.collideBoundingBox`.
+        let Some(step) = event.level.collide(host, entity, motion) else { return };
+        let Some([x, y, z]) = entity.position(host) else { return };
+        let to = [x + step[0], y + step[1], z + step[2]];
+        entity.client_lerp_to(host, to, [0.0, 0.0], 3);
+    }
+}
+```
+
+The tick may move only the copy it is ticking: `EntityRef::client_set_position`,
+`client_set_velocity` and `client_lerp_to` refuse any other entity and any call outside the tick,
+and `client_lerp_target` reads the ease in progress. None of it reaches the server, whose next
+update for the entity overwrites the copy. `general_motion_received` answers what velocity a copy
+keeps when the server sends one (vanilla's `lerpMotion`; by default, the one sent).
+
 ## What draws through registered renderers
 
 Registered renderers draw three routes:

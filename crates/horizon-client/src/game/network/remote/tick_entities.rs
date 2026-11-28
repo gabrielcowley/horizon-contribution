@@ -828,5 +828,10 @@ impl Game<'_> {
                 r.cart_lerps.entry(id).or_insert(l);
             }
         }
+        // A general row's client tick follows its step (`LivingEntity.aiStep`'s interpolation,
+        // then `travel`), with the eases back in place for it to read and replace.
+        if running {
+            self.client_tick_general_rows();
+        }
     }
 }

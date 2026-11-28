@@ -142,8 +142,15 @@ static BUILTIN: std::sync::Mutex<BuiltinCache> = std::sync::Mutex::new(Vec::new(
 /// file never changes while the game runs, and parsing it took about 3 ms
 /// of the frame that joins a server (or opens a single-player world).
 /// `None` when it is missing or invalid (not cached: a fixed install can
-/// join again).
+/// join again). Tests build it each time: the ids hold the installed mods'
+/// general entity types and custom stats, which a game fixes for its run but
+/// each test installs its own.
 pub(super) fn builtin_registries(root: &std::path::Path) -> Option<Arc<Builtin>> {
+    if cfg!(test) {
+        return Some(Arc::new(horizon_client::lan::data::with_custom_stats(
+            Builtin::find(root).and_then(|p| Builtin::load(&p).ok())?,
+        )));
+    }
     let mut cache = BUILTIN.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, builtin)) = cache.iter().find(|(cached, _)| cached == root) {
         return Some(builtin.clone());

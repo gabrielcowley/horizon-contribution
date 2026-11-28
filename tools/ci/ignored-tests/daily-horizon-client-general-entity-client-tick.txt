@@ -1,0 +1,3 @@
+# A general entity type's client tick and motion answer on a client's copies of its rows (gap/general-entity-bodies, the client tick).
+horizon-client game::general_client_tick_tests::a_client_tick_moves_only_the_row_it_ticks lib daily resources
+horizon-client game::general_client_tick_tests::a_sent_motion_keeps_the_parts_answer lib daily resources

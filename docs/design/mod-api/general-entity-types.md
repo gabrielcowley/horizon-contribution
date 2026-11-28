@@ -108,7 +108,18 @@ EntityPart is shared behavior, not mutable per-instance storage. Follow [PR aris
 
 At the authoritative entity phase, walk eligible general rows once in stable join order, with an indexed iteration schedule maintained on mutation rather than sorting each tick. For each root run common bookkeeping, its subscribed server behavior, then its passenger subtree. A passenger is not also ticked as a root. Newly committed spawns first tick next phase; a row removed before its turn receives no tick. Buffer structural edits until safe boundaries. Revalidate deferred operations after listener writes and refuse stale decisions without recomputing.
 
-Join ordering and next-phase spawn visibility are proposed Horizon choices pending vanilla oracle comparison. They must not reorder existing vanilla families incidentally. Client interpolation/render updates never execute authoritative behavior.
+Join ordering and next-phase spawn visibility are proposed Horizon choices pending vanilla oracle comparison. They must not reorder existing vanilla families incidentally. Client interpolation/render updates never execute authoritative behavior: a client tick writes only its own copy of the row it ticks.
+
+A type's part also ticks on the client (`general_entity_client_tick`), once
+per client tick for each copy, after the copy's step toward the server's pose.
+That tick runs no authority: the host moves only the copy it is ticking, on
+that client (`EntityRef::client_set_position`, `client_set_velocity`,
+`client_lerp_to`, and `client_lerp_target` to read the ease in progress), and
+the server's next update overwrites it. `LevelRef::collide` is vanilla's
+`Entity.collideBoundingBox` for a predicted step. `general_motion_received`
+answers the velocity a copy keeps from one the server sends
+(`Entity.lerpMotion`). Both hooks are native-only until stage 4b's wasm
+adapter.
 
 Use arismoko/horizon#1606's residency journal and visibility boundary for insert, lift, restore, move and retirement. Unloaded or parked entities persist but do not tick; ordinary entities do not acquire chunk tickets merely by existing. Temporary lift is not removal and cannot retire attachments or emit a tracking despawn. Commit publishes changes once; abort restores the original join identity, row and attachments. Save refuses while a lifted pass or entity transaction is open. Dimension transfer preserves UUID and data, invalidates source-scoped handles, removes source tracking and creates destination tracking atomically. World close invalidates its epoch.
 

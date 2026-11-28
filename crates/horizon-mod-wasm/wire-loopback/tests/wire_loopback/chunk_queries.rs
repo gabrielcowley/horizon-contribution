@@ -5,6 +5,7 @@ use mod_api::prelude::*;
 struct World;
 impl mod_api::Backend for World {}
 mod_api::impl_backend_areas!(World, except(levels));
+impl mod_api::prelude::LevelsClientBackend for World {}
 impl LevelsBackend for World {
     fn chunk_is_slime_chunk(&self, chunk: mod_api::ChunkRef) -> Option<bool> {
         (chunk.level().epoch() == mod_api::WorldEpoch::new(7)).then_some(chunk.pos() == [-17, 29])

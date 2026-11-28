@@ -1175,4 +1175,50 @@ pub trait EntitiesClientBackendMut {
     /// Returns false for stale, untracked, server-side, or unsupported entities.
     #[access(WorldOnly)]
     fn entity_sprint_particles(&mut self, entity: EntityRef) -> bool;
+    /// Side: client.
+    /// Places this client's copy of the general entity row at `pos` (`Entity.setPos` on the
+    /// client): only the row `general_entity_client_tick` is ticking, and only inside it. Its
+    /// previous position stays, so the frame eases from there; nothing reaches the server, and
+    /// the server's next move or teleport of the row places it again. False, with nothing
+    /// written, for any other entity, outside that hook, for a position that is not finite, or
+    /// on a server.
+    #[access(WorldOnly)]
+    fn entity_client_set_position(&mut self, entity: EntityRef, pos: [f64; 3]) -> bool;
+    /// Side: client.
+    /// Sets the velocity of this client's copy of the general entity row
+    /// (`Entity.setDeltaMovement` on the client), as `entity_client_set_position` may: only the
+    /// row being client-ticked, inside `general_entity_client_tick`, and a velocity the server
+    /// sends later replaces it. False, with nothing written, for any other entity, outside that
+    /// hook, for a velocity that is not finite, or on a server.
+    #[access(WorldOnly)]
+    fn entity_client_set_velocity(&mut self, entity: EntityRef, velocity: [f64; 3]) -> bool;
+    /// Side: client.
+    /// Eases this client's copy of the general entity row toward `pos`, turned to `rotation`
+    /// (yaw, pitch in degrees), over `steps` client ticks (`Entity.lerpTo`), in place of any ease
+    /// in progress: each later tick takes `1/steps` of what is left, as the server's moves do.
+    /// As `entity_client_set_position` may: only the row being client-ticked, inside
+    /// `general_entity_client_tick`, and the server's next move starts its own ease. False, with
+    /// nothing written, for any other entity, outside that hook, for no steps, a value that is
+    /// not finite, or on a server.
+    #[access(WorldOnly)]
+    fn entity_client_lerp_to(
+        &mut self,
+        entity: EntityRef,
+        pos: [f64; 3],
+        rotation: [f32; 2],
+        steps: u32,
+    ) -> bool;
+}
+/// The handles' client reads of the `entities` area, implemented by the game and reached through [`Backend`].
+// hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
+#[doc(hidden)]
+#[horizon_mod_api_macros::host_area]
+pub trait EntitiesClientBackend {
+    /// Side: client.
+    /// The ease in progress of this client's copy of the general entity row: the position it is
+    /// heading for and the client ticks left (`lerpX`, `lerpY`, `lerpZ` and `lerpSteps`), as the
+    /// server's last move or `entity_client_lerp_to` started it. None once it has arrived, for an
+    /// entity that is not a client's copy of a general row, a stale handle, or on a server.
+    #[access(WorldOnly)]
+    fn entity_client_lerp_target(&self, entity: EntityRef) -> Option<([f64; 3], u32)>;
 }

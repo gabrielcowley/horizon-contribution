@@ -309,6 +309,8 @@ pub mod tests {
     #[cfg(test)]
     mod_api::impl_backend_areas!(TankWorld, except(block_entities, fluids_energy, levels));
     #[cfg(test)]
+    impl mod_api::prelude::LevelsClientBackend for TankWorld {}
+    #[cfg(test)]
     impl mod_api::prelude::FluidsEnergyBackendMut for TankWorld {
         fn fluid_tank_insert(
             &mut self,

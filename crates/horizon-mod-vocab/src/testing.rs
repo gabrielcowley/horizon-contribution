@@ -955,6 +955,8 @@ crate::impl_backend_mut_areas!(
 );
 
 impl crate::prelude::PlayersClientBackend for FakeHost {}
+impl crate::prelude::EntitiesClientBackend for FakeHost {}
+impl crate::prelude::LevelsClientBackend for FakeHost {}
 
 /// Scope the controller lookup rows prepared by the API-owned registration fixture.
 // hidden: API-owned test setup uses this vocabulary fixture, not mod authoring code.

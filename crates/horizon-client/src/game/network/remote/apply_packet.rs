@@ -412,7 +412,6 @@ impl Game<'_> {
                     &kind,
                     p.position,
                     [rotation[0], rotation[1]],
-                    p.velocity,
                 ) {
                     self.spawn_added_projectile(&p, &kind, (rotation[0], rotation[1]), replace);
                 }

@@ -5,6 +5,7 @@ use mod_api::prelude::*;
 struct World;
 impl mod_api::Backend for World {}
 mod_api::impl_backend_areas!(World, except(levels));
+impl mod_api::prelude::LevelsClientBackend for World {}
 impl LevelsBackend for World {
     fn level_entity_ticking(&self, level: mod_api::LevelRef, pos: [i32; 3]) -> Option<bool> {
         (level.epoch() == mod_api::WorldEpoch::new(7)).then_some(pos == [-17, 64, 29])

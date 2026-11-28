@@ -188,6 +188,7 @@ struct LiveSectionHost {
 mod_api::impl_host_areas!(LiveSectionHost);
 mod_api::impl_server_host_areas!(LiveSectionHost);
 mod_api::impl_backend_areas!(LiveSectionHost, except(entities));
+impl mod_api::prelude::EntitiesClientBackend for LiveSectionHost {}
 
 impl mod_api::prelude::EntitiesBackend for LiveSectionHost {
     fn entity_position(&self, entity: EntityRef) -> Option<[f64; 3]> {

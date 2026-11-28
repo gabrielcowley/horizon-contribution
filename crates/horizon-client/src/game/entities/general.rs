@@ -613,6 +613,10 @@ pub struct GeneralStore {
     /// Each general vehicle's kept rider places, by the vehicle's id: the
     /// copy of its `horizon:rider_places` attachment every seat read takes.
     pub(in crate::game) rider_places: FxHashMap<u32, Vec<riders::RiderPlace>>,
+    /// The client copy `general_entity_client_tick` is ticking: the only row the
+    /// client-row writes (`entity_client_set_position` and the others) may change, and
+    /// only while its tick runs.
+    pub client_ticking: Option<u32>,
 }
 
 /// Root-to-rider adjacency of the general rows, as a first-child and

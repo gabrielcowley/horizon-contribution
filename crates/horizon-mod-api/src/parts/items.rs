@@ -709,6 +709,8 @@ pub mod tests {
     #[cfg(test)]
     mod_api::impl_backend_areas!(Shelf, except(block_entities, items, levels));
     #[cfg(test)]
+    impl mod_api::prelude::LevelsClientBackend for Shelf {}
+    #[cfg(test)]
     impl mod_api::prelude::ItemsBackendMut for Shelf {
         fn container_insert(
             &mut self,

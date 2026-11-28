@@ -76,6 +76,14 @@ pub(crate) fn native_only_hook(name: &str) -> Option<&'static str> {
         "general_passenger_removed" => Some(
             "general_passenger_removed: general entity passenger removal is not yet available to wasm mods (the wasm adapter is #792's stage 4b)",
         ),
+        // The general entity client tick and motion answer follow the server tick's
+        // native-first offer: a wasm type keeps vanilla's defaults until stage 4b.
+        "general_entity_client_tick" => Some(
+            "general_entity_client_tick: general entity client ticks are not yet available to wasm mods (the wasm adapter is #792's stage 4b)",
+        ),
+        "general_motion_received" => Some(
+            "general_motion_received: general entity motion answers are not yet available to wasm mods (the wasm adapter is #792's stage 4b)",
+        ),
         _ => None,
     }
 }

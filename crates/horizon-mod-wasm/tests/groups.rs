@@ -33,6 +33,7 @@ impl mod_api::prelude::BlockEntitiesBackend for World {
 }
 impl Backend for World {}
 mod_api::impl_backend_areas!(World, except(block_entities, levels));
+impl mod_api::prelude::LevelsClientBackend for World {}
 impl mod_api::prelude::EntitiesHost for World {
     fn level(&self, dimension: &str) -> Option<LevelRef> {
         (dimension == "minecraft:overworld").then(overworld)

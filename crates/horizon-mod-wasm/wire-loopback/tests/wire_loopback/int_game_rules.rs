@@ -50,6 +50,7 @@ impl Hooks for Register {
 struct World;
 impl mod_api::Backend for World {}
 mod_api::impl_backend_areas!(World, except(levels));
+impl mod_api::prelude::LevelsClientBackend for World {}
 impl LevelsBackend for World {
     fn level_game_rule_int(
         &self,

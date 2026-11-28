@@ -1735,6 +1735,28 @@ pub trait LevelsBackendMut {
         biome: &str,
     ) -> Result<u32, BiomeFillRefusal>;
 }
+/// The handles' client reads of the `levels` area, implemented by the game and reached through [`Backend`].
+// hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
+#[doc(hidden)]
+#[horizon_mod_api_macros::host_area]
+pub trait LevelsClientBackend {
+    /// Side: client.
+    /// `Entity.collideBoundingBox` on this client: how far `entity`'s box may move by `motion`
+    /// in this client's level before the blocks' collision shapes, the world border's walls and
+    /// the entities that stop movers stop it (`EntityGetter.getEntityCollisions`: boats, living
+    /// shulkers, a happy ghast held still), with no step-up. Each axis is cut as vanilla cuts
+    /// it, y first. Nothing moves: the answer is for the caller to place the entity with, as
+    /// `general_entity_client_tick` predicts a step. Unloaded chunks stop nothing. None for a
+    /// stale or foreign level, an entity this client has no box for, a motion that is not
+    /// finite, or on a server.
+    #[access(WorldOnly)]
+    fn level_collide(
+        &self,
+        level: LevelRef,
+        entity: EntityRef,
+        motion: [f64; 3],
+    ) -> Option<[f64; 3]>;
+}
 /// The handles' client writes of the `levels` area, implemented by the game and reached through [`ClientBackendMut`].
 // hidden: a handle's backend, reached through `Backend`; mods call the handle, never this trait
 #[doc(hidden)]

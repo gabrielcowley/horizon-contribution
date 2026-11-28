@@ -2,7 +2,8 @@
 //! vanilla's add packet, moved by its move, teleport and velocity packets with vanilla's
 //! three-step `lerpTo`, and dropped with its remove packet. They live in the same general store
 //! as the server's rows, under the server's network id, so every both-side entity read finds
-//! them; no mod behaviour runs on them (a client never ticks a world).
+//! them. No authoritative behaviour runs on them (a client never ticks a world); a type's
+//! client tick and motion answer are in `remote_general_tick.rs`.
 use super::Game;
 use crate::game::general::{GeneralRow, general_type_catalog};
 use horizon_client::join_seq::JoinSeq;
@@ -17,7 +18,6 @@ impl Game<'_> {
         kind: &str,
         position: [f64; 3],
         rotation: [f32; 2],
-        velocity: [f64; 3],
     ) -> bool {
         let Some(type_slot) = general_type_catalog().slot(kind) else {
             return false;
@@ -33,7 +33,9 @@ impl Game<'_> {
             type_slot,
             position: at,
             previous: at,
-            velocity: Vec3::new(velocity[0], velocity[1], velocity[2]),
+            // `Entity`'s own zero: `recreateFromPacket`'s `lerpMotion` sets the sent one next
+            // (`remote_general_motion`), through the type's `general_motion_received`.
+            velocity: Vec3::new(0.0, 0.0, 0.0),
             rotation,
             previous_rotation: rotation,
             fall_distance: 0.0,
@@ -51,8 +53,19 @@ impl Game<'_> {
         true
     }
 
-    /// `Entity.lerpMotion` for a client's general row: true when `id` is one.
+    /// `Entity.lerpMotion` for a client's general row: true when `id` is one. The row keeps
+    /// what its type's `general_motion_received` answers, or the velocity sent.
     pub(super) fn remote_general_motion(&mut self, id: i32, velocity: [f64; 3]) -> bool {
+        if !self
+            .resident_entities
+            .general
+            .rows
+            .iter()
+            .any(|row| row.id == id as u32)
+        {
+            return false;
+        }
+        let velocity = self.general_motion_kept(id as u32, velocity);
         let rows = &mut self.resident_entities.general.rows;
         let Some(i) = rows.iter().position(|row| row.id == id as u32) else {
             return false;
@@ -77,8 +90,8 @@ impl Game<'_> {
 
     /// One client tick of the general rows: each takes a step of its `lerpTo` toward the
     /// server's pose (`step`, `turn` and `tilt`, the shared interpolation of `tick_remote_entities`), and
-    /// counts a tick of age for its renderer. Nothing else runs: a client's row has no
-    /// behaviour.
+    /// counts a tick of age for its renderer. Its type's client tick follows, once every row
+    /// has taken its step (`client_tick_general_rows`).
     pub(super) fn tick_remote_general(
         &mut self,
         step: &mut impl FnMut(u32, Vec3) -> Vec3,

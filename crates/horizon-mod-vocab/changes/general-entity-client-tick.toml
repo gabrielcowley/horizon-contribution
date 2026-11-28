@@ -1,0 +1,13 @@
+ids = [
+  "hook:general_entity_client_tick",
+  "type:GeneralEntityClientTickEvent",
+  "hook:general_motion_received",
+  "type:GeneralMotionReceivedEvent",
+  "handle:EntityRef::client_set_position",
+  "handle:EntityRef::client_set_velocity",
+  "handle:EntityRef::client_lerp_to",
+  "handle:EntityRef::client_lerp_target",
+  "handle:LevelRef::collide",
+]
+why = "General entity types tick on the client (arismoko/horizon#792, the client half of Entity.tick): general_entity_client_tick runs for each client copy of a row after its step toward the server's pose, and may move only that copy, on that client, with EntityRef::client_set_position, client_set_velocity and client_lerp_to (Entity.setPos, setDeltaMovement and lerpTo); client_lerp_target reads the ease in progress. LevelRef::collide is vanilla's Entity.collideBoundingBox for a predicted step. general_motion_received answers the velocity a copy keeps from one the server sends (Entity.lerpMotion). The server's next update overwrites whatever the client wrote. Both hooks are native-only until the wasm adapter of stage 4b."
+migrate = "Additive."

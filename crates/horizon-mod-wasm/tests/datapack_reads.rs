@@ -15,6 +15,7 @@ impl Host for World {
 }
 impl Backend for World {}
 mod_api::impl_backend_areas!(World, except(levels));
+impl mod_api::prelude::LevelsClientBackend for World {}
 mod_api::impl_host_areas!(World, except(levels, keys));
 impl mod_api::prelude::LevelsHost for World {
     fn is_loaded(&self, id: &str) -> bool {
