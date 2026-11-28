@@ -121,6 +121,11 @@ pub(super) fn load_world_rest(
                     "Horizon: mod entity attributes of {} never reached the catalog; ignored",
                     declaration.id
                 ),
+                // A general type with a living body reads its row from the catalog.
+                (None, _)
+                    if crate::game::general::general_type_catalog()
+                        .slot(&declaration.id)
+                        .is_some() => {}
                 (None, _) => log::warn!(
                     "Horizon: mod entity attributes of {} name no loaded entity type; ignored",
                     declaration.id

@@ -226,7 +226,7 @@ impl Game<'_> {
         }
     }
     /// The ticks the entity burns for (`Entity.getRemainingFireTicks`):
-    /// players, mobs, armor stands and items.
+    /// players, mobs, armor stands, items and general rows with a living body.
     pub(super) fn entity_fire_ticks(&self, entity: EntityRef) -> Option<i32> {
         match self.native_entity_body(entity)? {
             Body::Player(p) => Some(p.fire_ticks),
@@ -237,6 +237,15 @@ impl Game<'_> {
             Body::Other(Target::Item(id)) => {
                 Some(self.dropped.iter().find(|i| i.id == id)?.fire_ticks)
             }
+            Body::Other(Target::General(id)) => self
+                .resident_entities
+                .general
+                .rows
+                .iter()
+                .find(|row| row.id == id)?
+                .living
+                .as_ref()
+                .map(|living| living.fire_ticks),
             Body::Other(_) => None,
         }
     }
@@ -369,6 +378,21 @@ impl Game<'_> {
                         i.fire_ticks = ticks;
                         true
                     })
+            }
+            Some(Target::General(id)) => {
+                let rows = &mut self.resident_entities.general.rows;
+                let Some(i) = rows
+                    .iter()
+                    .position(|row| row.id == id && row.living.is_some())
+                else {
+                    return false;
+                };
+                rows.update(i, |row| {
+                    if let Some(living) = row.living.as_deref_mut() {
+                        living.fire_ticks = ticks;
+                    }
+                });
+                true
             }
             _ => false,
         }

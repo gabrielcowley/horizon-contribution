@@ -39,6 +39,8 @@ impl Game<'_> {
         if self.resident_entities.general.rows.is_empty() {
             return Ok(());
         }
+        // The mobs' and players' `pushEntities` against living rows, on their turns.
+        self.push_general_living_from_others();
         // `begin_ordered_ticks`' cutoff: a row numbered at or above `born`
         // joined during this tick and first ticks the next.
         let born = self.ordered.born;
@@ -107,6 +109,11 @@ impl Game<'_> {
                         && let Some(epoch) = epoch
                     {
                         self.dispatch_general_tick(kind, epoch, id);
+                    }
+                    // A living body's own tick runs after the type's lines, as
+                    // `super.tick()` follows a subclass's (`GeneralBody::Living`).
+                    if general_row_live(self, index, mount) {
+                        self.tick_general_living(index);
                     }
                     if round.listening() {
                         self.native_tick_post_one(&round, id, kind);
@@ -182,6 +189,10 @@ impl Game<'_> {
                     && let Some(epoch) = epoch
                 {
                     self.dispatch_general_tick(kind, epoch, id);
+                }
+                // A living rider's body tick, without travel (`Entity.rideTick`).
+                if general_row_live(self, index, mount) {
+                    self.tick_general_living_rider(index);
                 }
                 if round.listening() {
                     self.native_tick_post_one(round, id, kind);

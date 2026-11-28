@@ -498,6 +498,16 @@ impl GeneralTypeCatalog {
         self.entries[slot].payload_version
     }
 
+    /// The vanilla behaviour set the type's rows run.
+    pub fn body(&self, slot: usize) -> &mod_api::GeneralBody {
+        &self.entries[slot].body
+    }
+
+    /// Whether the type is immune to fire (`EntityType.fireImmune`).
+    pub fn fire_immune(&self, slot: usize) -> bool {
+        self.entries[slot].fire_immune
+    }
+
     /// The type's declared save policy, the writer of a record consults: a
     /// `noSave` type's rows produce zero persisted records.
     pub fn save_policy(&self, slot: usize) -> mod_api::GeneralSavePolicy {
@@ -587,6 +597,11 @@ pub struct GeneralRow {
     /// The entity-owned attachment registration lifetime (arismoko/horizon#796: the sole
     /// Part-data store; there is no parallel entity data map).
     pub attachment_lifetime: horizon_mod_runtime::attachments::AttachmentLifetime,
+    /// The living half of a row whose type has a living body (`GeneralBody::Living`):
+    /// health, fire, air and the rest of `LivingEntity`'s state. None for any other
+    /// row. A client's copy holds what the server's entity data sends: health and the
+    /// on-fire flag.
+    pub living: Option<Box<living::GeneralLiving>>,
 }
 
 impl EntityRules for GeneralRow {}
@@ -721,6 +736,16 @@ impl Game<'_> {
         Some(record)
     }
 
+    /// Write row `id`'s living body, if it has one, into its saved record `tag`.
+    fn write_general_living(&self, tag: &mut Tag, id: u32) {
+        let rows = &self.resident_entities.general.rows;
+        if let Some(row) = rows.iter().find(|row| row.id == id)
+            && let Some(living) = &row.living
+        {
+            living.write(tag, row.fall_distance);
+        }
+    }
+
     /// Write each riding row's attachments into its own record inside the
     /// saved tree (`save_lists!` writes the root's): a rider's identity
     /// travels with its record, matched by UUID inside `Passengers`.
@@ -754,6 +779,7 @@ impl Game<'_> {
                 continue;
             };
             crate::game::persist::write_attachments(rider, row.id, &self.entity_attachments);
+            self.write_general_living(rider, row.id);
             self.write_general_rider_attachments(rider, row.id);
         }
     }
@@ -1006,7 +1032,15 @@ impl Game<'_> {
             needs_sync: false,
             age: 0,
             attachment_lifetime: Default::default(),
+            living: None,
         };
+        row.living = self.general_living_for(slot, tag);
+        if row.living.is_some()
+            && let Some(Tag::Double(bits)) = tag.get("fall_distance")
+            && f64::from_bits(*bits).is_finite()
+        {
+            row.fall_distance = f64::from_bits(*bits);
+        }
         self.bind_saved_entity_attachments(id, &mut row.attachment_lifetime);
         self.resident_entities.general.rows.push(row);
         // Its own box, when its saved attachments carry one (`entity_set_bounds`).
@@ -1131,6 +1165,7 @@ impl Entity for GeneralRow {
         }
         let record = game.general_row_record(row.id, &mut HashSet::new())?;
         let mut tag = record.to_tag();
+        game.write_general_living(&mut tag, row.id);
         game.write_general_rider_attachments(&mut tag, row.id);
         Some((key, tag))
     }
@@ -1162,6 +1197,9 @@ mod tick;
 #[path = "general/bounds.rs"]
 mod bounds;
 
+#[path = "general/living.rs"]
+pub(in crate::game) mod living;
+
 #[path = "general/draw.rs"]
 mod draw;
 
@@ -1179,6 +1217,10 @@ mod save_load_tests;
 #[cfg(test)]
 #[path = "general/tick_tests.rs"]
 mod tick_tests;
+
+#[cfg(test)]
+#[path = "general/living_tests.rs"]
+mod living_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1381,6 +1423,8 @@ mod tests {
             tracking_chunks: 8,
             update_interval: 3,
             sends_velocity: true,
+            body: mod_api::GeneralBody::None,
+            fire_immune: false,
             payload_version: 1,
             required_features: Vec::new(),
         }
@@ -1461,6 +1505,7 @@ mod tests {
             needs_sync: false,
             age: 0,
             attachment_lifetime: Default::default(),
+            living: None,
         });
         let mut table = EntityTable::new(journal);
         let EntityLookup::Found { location, .. } =

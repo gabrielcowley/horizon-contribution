@@ -5588,6 +5588,36 @@ impl Game<'_> {
                 );
             }
         }
+        // A general row's living body on fire (`Entity.displayFireAnimation`), over its box.
+        for row in self.resident_entities.general.rows.iter() {
+            if !row.displays_fire() {
+                continue;
+            }
+            let at = Self::general_frame_position(row, alpha);
+            let local = Self::general_local_box(row);
+            let feet = [at[0], at[1] + local[0][1], at[2]];
+            let (width, height) = (
+                (local[1][0] - local[0][0]) as f32,
+                (local[1][1] - local[0][1]) as f32,
+            );
+            if !fire_visible(feet, width, height) {
+                continue;
+            }
+            horizon_client::fire_render::flames(
+                feet,
+                width,
+                height,
+                camera,
+                fire_yaw,
+                &self.gui.atlas.sprites,
+                self.world.light(
+                    feet[0].floor() as i32,
+                    feet[1].floor() as i32,
+                    feet[2].floor() as i32,
+                ),
+                &mut out,
+            );
+        }
         laps.lap("eg_fire_stands");
         // `ItemEntityRenderer`.
         self.mark_entity(out.len(), "minecraft:item");

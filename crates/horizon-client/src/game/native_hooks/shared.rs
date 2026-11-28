@@ -1596,7 +1596,8 @@ pub(super) fn knockback(level: DamageLevel<'_>, pushed: Hurting<'_>, knock: &mut
         Hurting::Player(_, source)
         | Hurting::Dragon(_, source)
         | Hurting::ArmorStand(_, source)
-        | Hurting::Entity(_, _, source) => match source.causing {
+        | Hurting::Entity(_, _, source)
+        | Hurting::General(_, _, source) => match source.causing {
             0 => attack.attacker,
             causing => causing,
         },

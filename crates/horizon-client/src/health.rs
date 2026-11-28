@@ -46,6 +46,9 @@ pub enum Hurting<'a> {
     ArmorStand(i32, HurtSource<'a>),
     /// A non-living entity, by its entity id and registry type.
     Entity(i32, &'a str, HurtSource<'a>),
+    /// A general entity row with a living body (`GeneralBody::Living`), by its entity
+    /// id and its mod type (`mymod:crate`).
+    General(i32, &'a str, HurtSource<'a>),
 }
 pub use horizon_world::living_damage::{DamageContainer, Reduction};
 /// The native hooks a hit runs, owned by the game and lent to the level the hit lands in
@@ -2429,7 +2432,8 @@ mod tests {
                 Hurting::Player(e, s)
                 | Hurting::Dragon(e, s)
                 | Hurting::ArmorStand(e, s)
-                | Hurting::Entity(e, _, s) => (e, format!("{} {}", s.damage_type, s.causing)),
+                | Hurting::Entity(e, _, s)
+                | Hurting::General(e, _, s) => (e, format!("{} {}", s.damage_type, s.causing)),
                 Hurting::Mob(mob, source) => (mob.id as i32, format!("{:?}", source.kind)),
             };
             if !matches!(entity, 9001..=9005 | 9011..=9013) {

@@ -403,6 +403,16 @@ impl Game<'_> {
                 from,
             ),
             Target::Stand(id) => self.command_damage_stand(id, ty, cause.or(by)),
+            Target::General(id) => self.hurt_general(
+                id,
+                crate::game::general::living::GeneralHit {
+                    damage_type: ty,
+                    amount,
+                    direct: by,
+                    causing: cause.or(by),
+                    from,
+                },
+            ),
             _ => false,
         }
     }

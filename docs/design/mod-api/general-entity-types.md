@@ -88,6 +88,29 @@ row it rides alone saves it in its `RootVehicle` and logs back in seated.
 The three rider moments are native-first: a wasm mod naming them is refused
 at load until stage 4b, and a wasm vehicle's riders take the defaults.
 
+A type may choose a body, one of vanilla's own behaviour sets, with
+`general_entity_body(path, body)`. `GeneralBody::Living(LivingSpec)` runs
+vanilla's `LivingEntity` without AI on the type's rows, the armor stand's
+path: the stand's travel, shove, honey slide and fire-contact scan are one
+shared piece of code (`horizon_client::entities::living_body`) that the stand
+and the rows both lend their fields to. A living row has health from its
+type's attribute set (`declare_entity_attributes` with the
+`minecraft:armor_stand` template), and is burnt, drowned, suffocated, hurt by
+falls, the void, explosions, `/kill` and `/damage` as `LivingEntity.hurtServer`
+hurts an entity with no armor and no effects, with the living damage hooks.
+It pushes and is pushed on each entity's turn, as vanilla's `pushEntities`
+runs both ways, and `general_push` answers when another entity's turn pushes
+it. A rider gets the body's base tick but no travel (`rideTick`), and a client
+draws a row's flames while the server's on-fire flag is set. Its body runs after the type's `general_entity_tick`,
+as `super.tick()` follows a subclass's lines, and saves with the row under
+vanilla's names (`Health`, `Fire`, `Air`, `HurtTime`, `DeathTime`). A type's
+`fire_immune` (`general_entity_fire_immune`) and a row's own
+(`EntityRef::set_fire_immune`) are vanilla's `fireImmune`. `living(..)` answers
+for a living row. Six `EntityPart` moments stand for a vanilla subclass's
+overrides, each with the body's vanilla default: `general_hurt`,
+`general_inside_block`, `general_can_collide_with`, `general_push`,
+`general_slot_item` and `general_set_slot_item`.
+
 The remaining sections describe the wider design, not shipped lifecycle support.
 
 ## Evidence and limits

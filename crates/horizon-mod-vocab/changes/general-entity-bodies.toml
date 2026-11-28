@@ -1,0 +1,17 @@
+ids = [
+  "method:GeneralTypesRegistrar::general_entity_body",
+  "method:GeneralTypesRegistrar::general_entity_fire_immune",
+  "type:GeneralBody",
+  "type:LivingSpec",
+  "type:GeneralEntityTypeDeclaration.body",
+  "type:GeneralEntityTypeDeclaration.fire_immune",
+  "handle:EntityRef::set_fire_immune",
+  "hook:general_hurt",
+  "hook:general_inside_block",
+  "hook:general_can_collide_with",
+  "hook:general_push",
+  "hook:general_slot_item",
+  "hook:general_set_slot_item",
+]
+why = "General entity types get a living body (arismoko/horizon#792): Registrar::general_entity_body with GeneralBody::Living runs vanilla's LivingEntity without AI on a type's rows, the armor stand's own movement code shared through horizon_client::entities::living_body, with health from the type's attribute set (the minecraft:armor_stand template), fire, lava, drowning, falls, suffocation, the void, explosions, /kill and melee, and pushing. general_entity_fire_immune and EntityRef::set_fire_immune give vanilla's fireImmune. Six EntityPart moments stand for a vanilla subclass's overrides: general_hurt, general_inside_block, general_can_collide_with, general_push, general_slot_item and general_set_slot_item. living(..) answers for a living row."
+migrate = "Additive. A GeneralEntityTypeDeclaration built by hand gains body and fire_immune (GeneralBody::None and false keep today's rows)."

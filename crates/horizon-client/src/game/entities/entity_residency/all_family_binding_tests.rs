@@ -133,6 +133,7 @@ fn every_ordinary_resident_family_binds_its_actual_owned_slot() {
                 needs_sync: false,
                 age: 0,
                 attachment_lifetime: Default::default(),
+                living: None,
             });
         bind(game, 4242, Kind::General);
         assert_eq!(maps.len(), 22);

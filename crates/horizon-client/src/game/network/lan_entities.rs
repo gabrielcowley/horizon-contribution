@@ -853,6 +853,17 @@ impl Game<'_> {
             e.head_yaw = row.rotation[0];
             e.velocity = [row.velocity.x, row.velocity.y, row.velocity.z];
             e.needs_sync = row.needs_sync;
+            // A living body's vanilla entity data: `DATA_SHARED_FLAGS_ID`'s
+            // on-fire bit and `LivingEntity.DATA_HEALTH_ID`.
+            if let Some(living) = &row.living {
+                e.on_ground = living.on_ground;
+                e.defaults.push((0, serializer::BYTE, Value::Byte(0)));
+                if living.fire_ticks > 0 && !row.fire_immune() {
+                    e.meta.push((0, serializer::BYTE, Value::Byte(1)));
+                }
+                e.meta
+                    .push((9, serializer::FLOAT, Value::Float(living.health)));
+            }
             if drain && row.needs_sync {
                 rows.update(i, |row| row.needs_sync = false);
             }
