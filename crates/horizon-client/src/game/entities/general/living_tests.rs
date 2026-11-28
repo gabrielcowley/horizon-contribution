@@ -412,7 +412,8 @@ fn a_servers_player_and_a_crate_push_each_other() {
 }
 
 /// A crate riding another gets the base part of its body tick (its fire burns down) but
-/// no travel (`Entity.rideTick`): its velocity is zeroed and gravity does not pull it.
+/// no travel (`Entity.rideTick`): its velocity is zeroed, and it ends the tick on its
+/// vehicle's seat (`positionRider`), not where its own velocity or gravity would take it.
 #[test]
 #[ignore = "daily"]
 fn a_riding_crate_burns_but_does_not_travel() {
@@ -429,9 +430,10 @@ fn a_riding_crate_burns_but_does_not_travel() {
         game.resident_entities.general.mount_writes += 1;
         tick(game);
         assert_eq!(living(game, rider).fire_ticks, 99, "its fire burns down");
+        let seat = game.general_rider_seat(vehicle, rider, 0.0).unwrap();
         let row = row(game, rider).unwrap();
         assert_eq!(row.velocity, Vec3::ZERO, "rideTick zeroes its velocity");
-        assert_eq!(row.position.y, 66.0, "and it does not fall");
+        assert_eq!(row.position, seat, "and it sits on its vehicle's seat");
     });
 }
 
