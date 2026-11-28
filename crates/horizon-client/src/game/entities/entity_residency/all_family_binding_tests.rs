@@ -132,6 +132,7 @@ fn every_ordinary_resident_family_binds_its_actual_owned_slot() {
                 local_box: None,
                 needs_sync: false,
                 age: 0,
+                hanging: Default::default(),
                 attachment_lifetime: Default::default(),
             });
         bind(game, 4242, Kind::General);

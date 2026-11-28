@@ -68,6 +68,25 @@ registered `EntityRenderer` (its shadow from `EntityRenderers::shadow_radius`), 
 from data alone; a type with no renderer draws only its debug hitbox. Riders
 of general vehicles are the next part.
 
+A type may choose a body, one of vanilla's own behaviour sets, with
+`general_entity_body(path, body)`; `GeneralBody::None` is the row above. The
+`Hanging(HangingSpec)` body is vanilla's `HangingEntity`, on the painting's
+own code: the painting's survival check (no block in the box, a solid block
+or diode behind every part of it) is shared, and a hanging row counts in
+every hanging entity's `canCoexist` as paintings and frames count in its.
+Its tick checks survival every 100 ticks after the type's own tick, as
+`super.tick()` follows a subclass's lines; anything that hurts it (a blast,
+`entity_hurt`) or moves it (a piston, a shulker's lid, `entity_push`) breaks
+it. Every break asks `hanging_break`, then drops the spec's item by
+`Painting.dropItem`'s rules. Its facing (any of six, south until set with
+`entity_set_hanging_direction`) is the engine's synced attachment
+`horizon:hanging_direction`, beside the box, and clients place it without
+easing. A type's part may replace vanilla's survival rule
+(`general_hanging_survives`, handed vanilla's three conditions), with
+`level_hanging_support` for vanilla's per-block rule, and a mod placing a row
+asks `entity_hanging_survives`. The `Living` body, picking and interaction,
+and a client tick are the other parts of the bodies work.
+
 The remaining sections describe the wider design, not shipped lifecycle support.
 
 ## Evidence and limits

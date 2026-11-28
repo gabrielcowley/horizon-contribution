@@ -243,6 +243,12 @@ impl Game<'_> {
                 Vec3::new(v.x + delta[0], v.y + delta[1], v.z + delta[2])
             });
         }
+        // `HangingEntity.push`: a hanging general row breaks instead of moving.
+        if let Target::General(id) = target
+            && self.general_hanging_moved(id)
+        {
+            return true;
+        }
         let Some(h) = self.native_walk_entity(entity.id()) else {
             return false;
         };

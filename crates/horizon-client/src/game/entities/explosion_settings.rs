@@ -80,7 +80,7 @@ impl BlastEffects {
 impl Game<'_> {
     /// The damage type the blast deals: the mod's, else `DamageSources.explosion`'s
     /// (`minecraft:player_explosion` for a caused blast).
-    pub(super) fn blast_damage_type(&self) -> &'static str {
+    pub(in crate::game) fn blast_damage_type(&self) -> &'static str {
         match self.combat.blast_settings.damage {
             Some(damage) => damage.name,
             None => super::creatures::damage_type(

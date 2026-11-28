@@ -9,10 +9,7 @@ use horizon_client::{
     mesher::Vertex,
     random_source,
 };
-use horizon_core::{
-    geometry::{Aabb, Vec3},
-    random::RandomSource,
-};
+use horizon_core::random::RandomSource;
 use std::sync::Arc;
 
 /// A `painting_variant` and whether `#placeable` lists it (in tag order).
@@ -133,37 +130,15 @@ fn faces_camera(corners: &[glam::DVec3; 4], normal: glam::DVec3) -> bool {
 impl Game<'_> {
     /// `HangingEntity.survives`: no block collision in the box, solid blocks
     /// (or diodes) behind it and no conflicting hanging entity overlapping it.
+    /// The first two are the check hanging general rows share (`hanging_room`),
+    /// and a hanging row facing the same way is in its way as a frame is.
     pub(super) fn painting_survives(&self, p: &Painting) -> bool {
         let (lo, hi) = p.bounds();
-        let bounds = Aabb::new(
-            Vec3::new(lo[0], lo[1], lo[2]),
-            Vec3::new(hi[0], hi[1], hi[2]),
-        );
-        let mut scene = horizon_client::collisions::SceneCollisions {
-            world: &self.world,
-            binding: self.collision,
-            subject: None,
-        };
-        if !scene.unobstructed(bounds).unwrap_or(false) {
-            return false;
-        }
-        // calculateSupportBox: moved half a block into the wall, deflated.
-        let s = p.step().map(f64::from);
-        let (slo, shi) = (
-            std::array::from_fn::<f64, 3, _>(|i| lo[i] - s[i] * 0.5 + 1.0e-7),
-            std::array::from_fn::<f64, 3, _>(|i| hi[i] - s[i] * 0.5 - 1.0e-7),
-        );
-        for x in slo[0].floor() as i32..=shi[0].floor() as i32 {
-            for y in slo[1].floor() as i32..=shi[1].floor() as i32 {
-                for z in slo[2].floor() as i32..=shi[2].floor() as i32 {
-                    let f = self.res.facts().get(self.world.block(x, y, z));
-                    if !(f.legacy_solid || f.has_class("DiodeBlock")) {
-                        return false;
-                    }
-                }
-            }
-        }
-        painting_coexists(p, &self.paintings, &self.item_frames)
+        let (unobstructed, supported) = self.hanging_room(lo, hi, p.step());
+        unobstructed
+            && supported
+            && painting_coexists(p, &self.paintings, &self.item_frames)
+            && !self.general_hanging_in_the_way(p.bounds(), p.step())
     }
     /// `HangingEntityItem.useOn` on a client level: SUCCESS once
     /// `Painting.create` finds a surviving variant (and the stack's

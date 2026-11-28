@@ -82,7 +82,7 @@ impl Game<'_> {
     }
 
     /// The general row `id`'s place in its level's list.
-    fn general_row_index(&self, id: u32) -> Option<usize> {
+    pub(in crate::game) fn general_row_index(&self, id: u32) -> Option<usize> {
         self.resident_entities
             .general
             .rows

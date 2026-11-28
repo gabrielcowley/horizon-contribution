@@ -108,6 +108,9 @@ impl Game<'_> {
                     {
                         self.dispatch_general_tick(kind, epoch, id);
                     }
+                    // The body's vanilla tick follows the type's own, as
+                    // `super.tick()` follows a subclass's lines.
+                    self.tick_general_body(index, mount);
                     if round.listening() {
                         self.native_tick_post_one(&round, id, kind);
                     }
@@ -183,6 +186,7 @@ impl Game<'_> {
                 {
                     self.dispatch_general_tick(kind, epoch, id);
                 }
+                self.tick_general_body(index, mount);
                 if round.listening() {
                     self.native_tick_post_one(round, id, kind);
                 }
@@ -229,6 +233,16 @@ impl Game<'_> {
                     "general entity {kind} #{id}: its tick's writes were rolled back after a native mod panicked: {panic}"
                 );
             }
+        }
+    }
+}
+
+impl Game<'_> {
+    /// The row at `index`'s body tick, when its type's tick left it live: a `Hanging` body's
+    /// survival check (`hanging.rs`). A `None` body has nothing to run.
+    fn tick_general_body(&mut self, index: usize, mount: Option<u32>) {
+        if general_row_live(self, index, mount) {
+            self.tick_general_hanging(index);
         }
     }
 }

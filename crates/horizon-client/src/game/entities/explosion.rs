@@ -1491,8 +1491,10 @@ impl Game<'_> {
         self.native_explosion_start(start, &mut cancel);
         cancel
     }
-    /// Paintings and cushions in reach (`BlockAttachedEntity.hurtServer`).
+    /// Paintings, hanging general rows and cushions in reach
+    /// (`BlockAttachedEntity.hurtServer`).
     fn explosion_breaks_hanging(&mut self, center: [f64; 3], diameter: f64) {
+        self.explosion_breaks_general_hanging(center, diameter);
         let mut i = 0;
         while i < self.paintings.len() {
             // HangingEntity.recalculateBoundingBox: a painting stands at the

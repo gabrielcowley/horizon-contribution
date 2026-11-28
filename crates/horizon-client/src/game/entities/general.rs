@@ -503,6 +503,15 @@ impl GeneralTypeCatalog {
     pub fn save_policy(&self, slot: usize) -> mod_api::GeneralSavePolicy {
         self.entries[slot].save_policy
     }
+
+    /// What the type's rows drop and sound like when its body is `Hanging`; none for any
+    /// other body.
+    pub fn hanging(&self, slot: usize) -> Option<&mod_api::HangingSpec> {
+        match &self.entries[slot].body {
+            mod_api::GeneralBody::Hanging(spec) => Some(spec),
+            _ => None,
+        }
+    }
 }
 
 /// The game's frozen registry, built from the installed declarations: the
@@ -584,6 +593,9 @@ pub struct GeneralRow {
     /// Ticks the row has lived on this side (`Entity.tickCount`): a client's
     /// copy counts them for its renderer's `age`.
     pub age: u32,
+    /// A `Hanging` body's facing and survival counter (`hanging.rs`); a row of
+    /// another body keeps the default and never reads it.
+    pub hanging: hanging::HangingState,
     /// The entity-owned attachment registration lifetime (arismoko/horizon#796: the sole
     /// Part-data store; there is no parallel entity data map).
     pub attachment_lifetime: horizon_mod_runtime::attachments::AttachmentLifetime,
@@ -988,12 +1000,15 @@ impl Game<'_> {
             local_box: None,
             needs_sync: false,
             age: 0,
+            hanging: Default::default(),
             attachment_lifetime: Default::default(),
         };
         self.bind_saved_entity_attachments(id, &mut row.attachment_lifetime);
         self.resident_entities.general.rows.push(row);
-        // Its own box, when its saved attachments carry one (`entity_set_bounds`).
+        // Its own box, when its saved attachments carry one (`entity_set_bounds`),
+        // and a hanging row's facing.
         self.refresh_general_box(id);
+        self.refresh_general_facing(id);
         // The riders' tags sit inside `Passengers` in the order the record
         // tree was built from them, so each rider's own tag (its saved
         // attachments) is the one at its index.
@@ -1145,6 +1160,9 @@ mod bounds;
 
 #[path = "general/draw.rs"]
 mod draw;
+
+#[path = "general/hanging.rs"]
+pub(in crate::game) mod hanging;
 
 #[cfg(test)]
 #[path = "general/save_load_tests.rs"]
@@ -1357,6 +1375,7 @@ mod tests {
             sends_velocity: true,
             payload_version: 1,
             required_features: Vec::new(),
+            body: mod_api::GeneralBody::None,
         }
     }
 
@@ -1434,6 +1453,7 @@ mod tests {
             local_box: None,
             needs_sync: false,
             age: 0,
+            hanging: Default::default(),
             attachment_lifetime: Default::default(),
         });
         let mut table = EntityTable::new(journal);

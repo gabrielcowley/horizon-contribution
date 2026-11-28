@@ -72,6 +72,7 @@ impl GeneralTypesRegistrar for PartRegistrar {
                     sends_velocity: true,
                     payload_version,
                     required_features: required_features.iter().map(|&f| f.to_owned()).collect(),
+                    body: GeneralBody::None,
                 });
             Ok(())
         })();
@@ -111,6 +112,58 @@ impl GeneralTypesRegistrar for PartRegistrar {
         declared.sends_velocity = sends_velocity;
         Ok(())
     }
+
+    fn general_entity_body(
+        &mut self,
+        path: &str,
+        body: GeneralBody,
+    ) -> Result<(), GeneralEntityRegistrationError> {
+        use GeneralEntityRegistrationError as Error;
+        if crate::__private::current_phase() != crate::__private::ModPhase::Registration {
+            self.refused.push(format!(
+                "mod {} sets a general entity type's body after the registry froze",
+                self.mod_id
+            ));
+            return Err(Error::Frozen);
+        }
+        if let GeneralBody::Hanging(spec) = &body
+            && !(namespaced(&spec.item) && namespaced(&spec.break_sound))
+        {
+            self.refused.push(format!(
+                "mod {} gives {path:?} a hanging body whose item or break sound is not a namespaced id",
+                self.mod_id
+            ));
+            return Err(Error::InvalidId);
+        }
+        let declared = self
+            .owned_declaration_id(path)
+            .ok()
+            .and_then(|id| self.general_entity_types.iter_mut().find(|d| d.id == id));
+        let Some(declared) = declared else {
+            self.refused.push(format!(
+                "mod {} sets the body of {path:?}, a general entity type it did not declare",
+                self.mod_id
+            ));
+            return Err(Error::InvalidId);
+        };
+        declared.body = body;
+        Ok(())
+    }
+}
+
+/// Whether `id` is a namespaced id (`namespace:path`): both halves non-empty,
+/// the namespace of `[a-z0-9_.-]` and the path of `[a-z0-9_.-/]`.
+fn namespaced(id: &str) -> bool {
+    let Some((namespace, path)) = id.split_once(':') else {
+        return false;
+    };
+    let allowed = |c: char, slash: bool| {
+        c.is_ascii_lowercase() || c.is_ascii_digit() || "_.-".contains(c) || slash && c == '/'
+    };
+    !namespace.is_empty()
+        && !path.is_empty()
+        && namespace.chars().all(|c| allowed(c, false))
+        && path.chars().all(|c| allowed(c, true))
 }
 
 #[cfg(test)]
@@ -344,5 +397,35 @@ mod tests {
             )
             .unwrap();
         assert_eq!(registrar.general_entity_types.len(), 1);
+    }
+
+    /// A hanging body sticks to the declared type; one whose drop is not a
+    /// namespaced id, or on a type the mod did not declare, refuses and
+    /// leaves the declaration's body as it was.
+    #[test]
+    pub(crate) fn general_entity_body_sets_a_declared_type_and_refuses_a_bad_spec() {
+        crate::__private::initialize().unwrap();
+        let (_phase, mut registrar) = registrar();
+        declare(&mut registrar, "board", 1.0, 1.0, 10, i32::MAX, &[]).unwrap();
+        let spec = |item: &str| {
+            GeneralBody::Hanging(HangingSpec {
+                item: item.to_owned(),
+                break_sound: "minecraft:entity.painting.break".to_owned(),
+            })
+        };
+        assert_eq!(
+            registrar.general_entity_body("board", spec("Not An Id")),
+            Err(Error::InvalidId)
+        );
+        assert_eq!(
+            registrar.general_entity_body("ghost", spec("mymod:board")),
+            Err(Error::InvalidId)
+        );
+        assert_eq!(registrar.general_entity_types[0].body, GeneralBody::None);
+        registrar
+            .general_entity_body("board", spec("mymod:board"))
+            .unwrap();
+        assert_eq!(registrar.general_entity_types[0].body, spec("mymod:board"));
+        assert_eq!(registrar.refused.len(), 2);
     }
 }

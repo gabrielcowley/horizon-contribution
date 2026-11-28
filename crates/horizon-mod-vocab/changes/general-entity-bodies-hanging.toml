@@ -1,0 +1,16 @@
+ids = [
+  "method:GeneralTypesRegistrar::general_entity_body",
+  "type:GeneralBody",
+  "type:HangingSpec",
+  "type:HangingCheck",
+  "handle:HangingCheck::survives",
+  "handle:HangingCheck::new",
+  "handle:HangingSpec::new",
+  "hook:general_hanging_survives",
+  "method:EntityPart::general_hanging_survives",
+  "type:GeneralHangingSurvivesEvent",
+  "handle:LevelRef::hanging_support",
+  "handle:EntityRef::hanging_survives",
+]
+why = "A general entity type can run vanilla's HangingEntity behaviour (arismoko/horizon#792, general entity bodies part b): Registrar::general_entity_body gives a declared type GeneralBody::Hanging(HangingSpec), and its rows then survive and break as paintings do, sharing the painting's survival check and the hanging entities' coexistence rule. The general_hanging_survives part moment lets a type replace vanilla's survival rule, level_hanging_support gives vanilla's per-block support rule, and entity_hanging_survives asks the check at placement. entity_set_hanging_direction, entity_hanging_direction, entity_hurt, entity_push and hanging_break reach hanging general rows. The declaration's wire layout changes for wasm mods."
+migrate = "Additive. A wasm mod rebuilds against the new declaration layout; general_hanging_survives is native-only until the general entity wasm adapter (#792 stage 4b)."

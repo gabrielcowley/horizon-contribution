@@ -1,0 +1,5 @@
+# A mod's general entity type with a Hanging body survives and breaks as a painting does (gap/general-entity-bodies).
+horizon-client game::general::hanging::tests::a_hanging_row_breaks_within_100_ticks_of_its_wall_going lib daily resources
+horizon-client game::general::hanging::tests::a_hanging_rows_drop_honours_creative_and_entity_drops lib daily resources
+horizon-client game::general::hanging::tests::a_painting_and_a_hanging_row_keep_out_of_each_others_way lib daily resources
+horizon-client game::general::hanging::tests::a_push_or_a_lid_breaks_a_hanging_row_unless_a_mod_keeps_it lib daily resources

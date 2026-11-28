@@ -2,11 +2,14 @@
 // catalog-order: 0244
 
 pub trait Hooks {
-    /// An item frame (`minecraft:item_frame`, `minecraft:glow_item_frame`) or
-    /// a painting (`minecraft:painting`), `kind` its entity type and `pos` the
-    /// block it hangs in of the level `dimension` (a `&str`), is about to break: a server player's hit
-    /// (`player`, their state swapped in, so `PlayerRef::tell` answers them), a
-    /// blast, or the wall it hangs on gone (`player` None for both). Where
+    /// An item frame (`minecraft:item_frame`, `minecraft:glow_item_frame`), a
+    /// painting (`minecraft:painting`) or a mod's hanging general row (a type
+    /// with a `GeneralBody::Hanging` body), `kind` its entity type and `pos`
+    /// the block it hangs in of the level `dimension` (a `&str`), is about to
+    /// break: a server player's hit (`player`, their state swapped in, so
+    /// `PlayerRef::tell` answers them), a blast, a piston, or the wall it hangs
+    /// on gone (`player` None for those). A hanging general row is also asked
+    /// when `entity_hurt` or `entity_push` would break it. Where
     /// `BlockAttachedEntity.hurtServer` and its survival check would kill
     /// it, before anything drops or sounds. Set `cancel` and it stays, as it
     /// was. A hit that only takes the item out of a frame does not break the

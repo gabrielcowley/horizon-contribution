@@ -65,6 +65,11 @@ pub(crate) fn native_only_hook(name: &str) -> Option<&'static str> {
         "general_entity_tick" => Some(
             "general_entity_tick: general entity ticks are not yet available to wasm mods (the wasm adapter is #792's stage 4b)",
         ),
+        // The hanging body's survival moment is an entity part method like the tick, and
+        // reaches wasm with the same adapter; a wasm hanging type keeps vanilla's rule.
+        "general_hanging_survives" => Some(
+            "general_hanging_survives: general entity part moments are not yet available to wasm mods (the wasm adapter is #792's stage 4b)",
+        ),
         _ => None,
     }
 }

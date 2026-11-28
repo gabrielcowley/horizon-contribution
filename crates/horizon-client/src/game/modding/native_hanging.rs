@@ -1,4 +1,4 @@
-//! Turning hanging entities for mods: a painting's or item frame's facing
+//! Turning hanging entities for mods: a painting's, item frame's or hanging general row's facing
 //! (`entity_set_hanging_direction`, read back by `entity_hanging_direction`) and an item frame's
 //! item (`entity_set_item_frame_rotation`).
 use super::{Game, commands::Target};
@@ -17,6 +17,7 @@ impl Game<'_> {
                 let painting = self.paintings.iter().find(|p| p.id == id)?;
                 direction_from_2d(painting.facing)
             }
+            Target::General(id) => self.general_hanging_direction(id),
             _ => None,
         }
     }
@@ -45,6 +46,7 @@ impl Game<'_> {
                 painting.facing = facing;
                 painting.pos
             }
+            Some(Target::General(id)) => return self.set_general_hanging_direction(id, direction),
             _ => return false,
         };
         self.world.modified.insert((pos[0] >> 4, pos[2] >> 4));

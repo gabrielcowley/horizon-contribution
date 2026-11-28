@@ -296,7 +296,9 @@ impl Game<'_> {
         ));
         let supported = behind.legacy_solid || (s[1] == 0 && behind.has_class("DiodeBlock"));
         // canCoexist(true): only hanging entities facing the same way block it.
-        supported && super::paintings::frame_coexists(f, &self.item_frames, &self.paintings)
+        supported
+            && super::paintings::frame_coexists(f, &self.item_frames, &self.paintings)
+            && !self.general_hanging_in_the_way(f.bounds(), f.step())
     }
     /// Asks the mods whether the acting guest may place a hanging entity
     /// of type `kind` at `pos` (`native_hanging_place`): true when one

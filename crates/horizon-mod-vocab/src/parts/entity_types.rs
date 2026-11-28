@@ -89,6 +89,97 @@ pub struct GeneralEntityTypeDeclaration {
     /// The ids of loaded mods this type requires, every one of which must be
     /// present for the declaration to stand.
     pub required_features: Vec<String>,
+    /// The vanilla behaviour set the type's rows run
+    /// ([`general_entity_body`](GeneralTypesRegistrar::general_entity_body)),
+    /// [`GeneralBody::None`] until that sets it.
+    pub body: GeneralBody,
+}
+
+/// The vanilla behaviour set a general entity type's rows run: one of
+/// vanilla's own entity families, shared with that family's code so the
+/// rows behave as it does.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+#[derive(horizon_mod_api_macros::Wire)]
+pub enum GeneralBody {
+    /// No behaviour of the engine's: the row stays where it is put, takes no
+    /// damage and is never broken. The body of a type that declares none.
+    #[default]
+    None,
+    /// Vanilla's `HangingEntity`, the path paintings and item frames run: no
+    /// gravity and no velocity. The row breaks when anything hurts it (a
+    /// blast, `entity_hurt`), when anything moves or pushes it (a piston,
+    /// `entity_push`), and when a survival check every 100 ticks fails; each
+    /// break first asks the `hanging_break` hook. A break drops the spec's
+    /// item and plays its break sound, a survival failure with no
+    /// `ENTITY_DIE` event, the others with one. Paintings and item frames count it as a hanging
+    /// entity when they check for room, and it counts them. Clients place
+    /// it where the server sends it, without easing. The mod sets its
+    /// position, box (`entity_set_bounds`) and facing
+    /// (`entity_set_hanging_direction`, all six directions, south until
+    /// set).
+    Hanging(HangingSpec),
+}
+
+/// What a [`GeneralBody::Hanging`] type drops and sounds like.
+#[derive(Clone, Debug, PartialEq, Eq)]
+// exhaustive: the item and sound vanilla's `HangingEntity.dropItem` uses; mods build it
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct HangingSpec {
+    /// The item a break drops (`Painting.dropItem`'s painting), a registered
+    /// item id: one of it, unless the `entityDrops` game rule is off or the
+    /// player who broke it is in creative mode.
+    pub item: String,
+    /// The sound event a break plays at the centre of the row's box
+    /// (`minecraft:entity.painting.break` for a painting): with the item,
+    /// and also when a creative player's break drops none, but not while
+    /// `entityDrops` is off.
+    pub break_sound: String,
+}
+
+/// Vanilla's three survival conditions of a hanging row
+/// (`HangingEntity.survives`), as the engine found them, which the type's
+/// part may combine with a rule of its own (`general_hanging_survives`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// exhaustive: vanilla's survives() has exactly these three conditions
+#[derive(horizon_mod_api_macros::Wire)]
+pub struct HangingCheck {
+    /// No block collision inside the row's box (`Level.noCollision`).
+    pub unobstructed: bool,
+    /// Every block of the support box (the row's box moved half a block
+    /// against its facing, less 1e-7 on each side) is solid or a redstone
+    /// diode (`calculateSupportBox`).
+    pub supported: bool,
+    /// No other hanging entity overlaps the box that faces the same way, and
+    /// no other row of the same type overlaps it at all
+    /// (`canCoexist(false)`).
+    pub alone: bool,
+}
+
+impl HangingSpec {
+    /// A spec that drops one `item` and plays `break_sound` when a row breaks.
+    pub fn new(item: impl Into<String>, break_sound: impl Into<String>) -> Self {
+        Self {
+            item: item.into(),
+            break_sound: break_sound.into(),
+        }
+    }
+}
+
+impl HangingCheck {
+    /// The three conditions as found.
+    pub fn new(unobstructed: bool, supported: bool, alone: bool) -> Self {
+        Self {
+            unobstructed,
+            supported,
+            alone,
+        }
+    }
+
+    /// Vanilla's answer: all three hold.
+    pub fn survives(self) -> bool {
+        self.unobstructed && self.supported && self.alone
+    }
 }
 
 /// A placeholder to build a declaration from: empty ids, a miscellaneous type that saves, vanilla's
@@ -108,6 +199,7 @@ impl Default for GeneralEntityTypeDeclaration {
             sends_velocity: true,
             payload_version: 1,
             required_features: Vec::new(),
+            body: GeneralBody::None,
         }
     }
 }
@@ -183,5 +275,19 @@ pub trait GeneralTypesRegistrar {
         &mut self,
         path: &str,
         sends_velocity: bool,
+    ) -> Result<(), GeneralEntityRegistrationError>;
+
+    /// The vanilla behaviour set the rows of the mod's general type `path`
+    /// (declared by [`declare_general_entity`](Self::declare_general_entity)
+    /// before this call) run: [`GeneralBody::None`] until this sets it.
+    ///
+    /// A path that names no type this mod declared refuses with `InvalidId`,
+    /// a [`GeneralBody::Hanging`] whose item or break sound is not a
+    /// namespaced id with `InvalidId` too, and a call after the registry
+    /// froze with `Frozen`, naming the mod, without panicking.
+    fn general_entity_body(
+        &mut self,
+        path: &str,
+        body: GeneralBody,
     ) -> Result<(), GeneralEntityRegistrationError>;
 }

@@ -258,9 +258,10 @@ impl Game<'_> {
             map.apply_sync(change);
         }
         self.bind_remote_attachment(message.holder);
-        // A general row's box is one of its synced attachments.
+        // A general row's box, and a hanging row's facing, are synced attachments.
         if let Holder::Entity(id) = message.holder {
             self.refresh_general_box(id);
+            self.refresh_general_facing(id);
         }
     }
 

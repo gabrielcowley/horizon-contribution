@@ -493,6 +493,18 @@ impl Game<'_> {
         }
     }
 
+    /// `HangingEntity.move`: a piston or a lid that moves a hanging general row breaks it
+    /// (`general_hanging_moved`) instead of moving it. True when `target` was one.
+    fn hanging_row_moved(&mut self, target: MoveWho) -> bool {
+        let MoveWho::Entity(EntityHandle::General(i)) = target else {
+            return false;
+        };
+        let Some(id) = self.resident_entities.general.rows.get(i).map(|row| row.id) else {
+            return false;
+        };
+        self.general_hanging_moved(id)
+    }
+
     /// Whether a pushed body is a shulker, which a shulker's lid leaves out.
     fn pushed_shulker(&self, target: MoveWho) -> bool {
         matches!(target, MoveWho::Entity(EntityHandle::Mob(i)) if self.mobs[i].species() == Species::Shulker)
@@ -535,6 +547,9 @@ impl Game<'_> {
         // Armor stands arm their gate in their own collided shove.
         if let MoveWho::Entity(EntityHandle::ArmorStand(i)) = target {
             self.lid_shoves_armor_stand(i, lid.shulker(), movement, stand_grid);
+            return;
+        }
+        if self.hanging_row_moved(target) {
             return;
         }
         let mut gate = self.entity_move(target, lid.mover(), movement);
@@ -916,6 +931,9 @@ impl Game<'_> {
         accumulators: &mut std::collections::HashMap<MoveWho, PistonMovement>,
         pricked: &mut Vec<u32>,
     ) {
+        if self.hanging_row_moved(target) {
+            return;
+        }
         let cause = MoverType::Piston;
         let mut gate = self.entity_move(target, cause, movement);
         if gate.skipped() {

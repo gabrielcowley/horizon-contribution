@@ -298,7 +298,17 @@ impl Game<'_> {
                 );
                 return;
             }
-            if r.cart_lerps.contains_key(&id) {
+            // A hanging general row keeps `Entity`'s NO_OP interpolation handler too: a
+            // move puts it there at once.
+            let rows = &mut self.resident_entities.general.rows;
+            if let Some(i) = rows.iter().position(|row| row.id == id as u32 && row.hangs()) {
+                rows.update(i, |row| {
+                    row.position = at;
+                    if let Some((yaw, pitch)) = rotation {
+                        row.rotation = [yaw, pitch];
+                    }
+                });
+            } else if r.cart_lerps.contains_key(&id) {
                 // A minecart on NewMinecartBehavior keeps Entity's NO_OP
                 // InterpolationHandler: a teleport puts it there at once.
                 if let Some(i) = self.carts.iter().position(|c| c.id == id as u32) {

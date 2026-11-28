@@ -56,6 +56,7 @@ mod general_handle_tests {
             local_box: None,
             needs_sync: false,
             age: 0,
+            hanging: Default::default(),
             attachment_lifetime: Default::default(),
         }
     }

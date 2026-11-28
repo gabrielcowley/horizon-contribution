@@ -43,11 +43,13 @@ impl Game<'_> {
             local_box: None,
             needs_sync: false,
             age: 0,
+            hanging: Default::default(),
             attachment_lifetime: Default::default(),
         });
         // The box and the rest of its attachments follow the add packet; a
         // row that had them under this id before keeps none of them.
         self.refresh_general_box(id);
+        self.refresh_general_facing(id);
         true
     }
 

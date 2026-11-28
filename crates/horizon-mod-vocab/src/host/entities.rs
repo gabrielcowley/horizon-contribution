@@ -617,9 +617,10 @@ pub trait EntitiesBackend {
     #[access(WorldOnly)]
     fn entity_pose(&self, entity: EntityRef) -> Option<&'static str>;
     /// Side: server.
-    /// The way a painting, item frame or glow item frame faces (`HangingEntity.getDirection`),
-    /// the value `entity_set_hanging_direction` sets. A painting answers only a horizontal
-    /// direction, as it keeps one. None for another kind or a stale handle.
+    /// The way a painting, item frame, glow item frame or hanging general row faces
+    /// (`HangingEntity.getDirection`), the value `entity_set_hanging_direction` sets. A painting
+    /// answers only a horizontal direction, as it keeps one; a hanging general row faces south
+    /// until it is turned. None for another kind or a stale handle.
     #[access(WorldOnly)]
     fn entity_hanging_direction(&self, entity: EntityRef) -> Option<Direction>;
 }
@@ -1089,15 +1090,27 @@ pub trait EntitiesBackendMut {
     #[access(WorldOnly)]
     fn entity_set_fuse(&mut self, entity: EntityRef, ticks: i32) -> bool;
     /// Side: server.
-    /// Turns a painting, item frame or glow item frame in place to face `direction`
+    /// Turns a painting, item frame, glow item frame or hanging general row
+    /// ([`GeneralBody::Hanging`](crate::GeneralBody::Hanging)) in place to face `direction`
     /// (`HangingEntity.setDirection`, `ItemFrame.setDirection`): its facing, the yaw and pitch
-    /// that follow from it and its bounds, nothing else. Like vanilla it doesn't check that the
-    /// entity can still hang there: the next survival check does. A painting takes only a
-    /// horizontal direction (vanilla's `Painting.setDirection` refuses up and down). Clients are
-    /// told through the entity's data. False for another kind, a vertical direction for a
-    /// painting, or a stale handle.
+    /// that follow from it and, for a painting or frame, its bounds, nothing else; a general
+    /// row keeps the box its mod gave it. Like vanilla it doesn't check that the entity can
+    /// still hang there: the next survival check does. A painting takes only a horizontal
+    /// direction (vanilla's `Painting.setDirection` refuses up and down); a frame and a general
+    /// row take all six. Clients are told through the entity's data. False for another kind, a
+    /// vertical direction for a painting, or a stale handle.
     #[access(WorldOnly)]
     fn entity_set_hanging_direction(&mut self, entity: EntityRef, direction: Direction) -> bool;
+    /// Side: server.
+    /// Whether the hanging general row ([`GeneralBody::Hanging`](crate::GeneralBody::Hanging))
+    /// can hang where it is: vanilla's `HangingEntity.survives` (no block in its box, a solid
+    /// block or diode behind every part of it, no other hanging entity in its way), or its
+    /// type part's answer to `general_hanging_survives`. The check the row takes every 100
+    /// ticks, asked now: a mod placing a row asks it after setting the box and facing, and
+    /// discards the row when it is false, as `HangingEntityItem.useOn` does. None for a stale
+    /// handle or an entity that is not a hanging general row.
+    #[access(WorldOnly)]
+    fn entity_hanging_survives(&mut self, entity: EntityRef) -> Option<bool>;
     /// Side: server.
     /// Turns the item in an item frame or glow item frame (`ItemFrame.setRotation`): `rotation`
     /// in eighths of a turn, wrapped to 0..=7 as vanilla's `rotation % 8`; the comparators reading

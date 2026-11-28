@@ -535,6 +535,14 @@ pub trait LevelsBackend {
         support: SupportType,
     ) -> Option<bool>;
     /// Side: server.
+    /// Whether the block at `pos` can hold a hanging entity, vanilla's per-block rule for the
+    /// support box behind one (`HangingEntity.survives`): its state is solid
+    /// (`BlockState.isSolid`) or a redstone diode (`DiodeBlock.isDiode`). With
+    /// `level_block_face_sturdy`, a hanging general type's own survival rule has every input
+    /// vanilla's has. None for another level, a stale handle or an unloaded block.
+    #[access(WorldOnly)]
+    fn level_hanging_support(&self, level: LevelRef, pos: [i32; 3]) -> Option<bool>;
+    /// Side: server.
     /// How strongly the block at `pos` powers the block on its `direction` side, power it
     /// conducts included (`SignalGetter.getSignal(pos, direction)`, as a block reads its
     /// neighbour `pos` that lies `direction` from it), 0 to 15. None for another level, a stale

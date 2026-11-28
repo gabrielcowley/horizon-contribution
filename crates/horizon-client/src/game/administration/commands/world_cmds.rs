@@ -403,6 +403,11 @@ impl Game<'_> {
                 from,
             ),
             Target::Stand(id) => self.command_damage_stand(id, ty, cause.or(by)),
+            // `BlockAttachedEntity.hurtServer`: a hanging general row breaks; a row of
+            // another body takes no damage.
+            Target::General(id) => self
+                .hurt_general_hanging(id, ty, cause.or(by))
+                .unwrap_or(false),
             _ => false,
         }
     }
