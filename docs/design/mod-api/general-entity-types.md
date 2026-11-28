@@ -65,8 +65,28 @@ in its own general store under their network ids, eases them with vanilla's
 three-step `lerpTo` and runs no behaviour on them. Its renderer is the type's
 registered `EntityRenderer` (its shadow from `EntityRenderers::shadow_radius`), handed an `EntityRenderState` whose
 `GeneralRenderState` (type, box, synced attachment values) can also be built
-from data alone; a type with no renderer draws only its debug hitbox. Riders
-of general vehicles are the next part.
+from data alone; a type with no renderer draws only its debug hitbox.
+
+A general row is also a vehicle, as vanilla's base `Entity` is.
+`entity_start_riding` takes it: players and mobs ride it, and a general row
+may ride another one through its mount link. It takes one passenger unless
+forced, through the shared mount path, so `mob_ride` hears a mob's ride, and
+the usual refusals (cycles, stale handles) hold. Where a rider sits is asked
+of the vehicle's entity parts once, when it is seated
+(`general_rider_placement`, from vanilla's `positionRider` default), and
+again only when the rider's box or vehicle attachment point changes. The
+answer is a `RiderPlacement`, a local offset turned with the vehicle's yaw
+and a world offset, kept in the engine's synced `horizon:rider_places`
+attachment, so both sides place riders by plain math each tick. A rider
+getting off asks `general_dismount_location` once, from vanilla's default
+(the vehicle's x and z at its box's top); a removed vehicle or one in a
+portal block lets it off at its own x and z, at the higher y, as
+`LivingEntity.dismountVehicle` does. `general_passenger_removed` tells the
+vehicle's parts once per rider and ride, and `living_set_in_sitting_pose`
+lets a seat clear a tamed animal's pose. A player whose vehicle is a general
+row it rides alone saves it in its `RootVehicle` and logs back in seated.
+The three rider moments are native-first: a wasm mod naming them is refused
+at load until stage 4b, and a wasm vehicle's riders take the defaults.
 
 A type may choose a body, one of vanilla's own behaviour sets, with
 `general_entity_body(path, body)`. `GeneralBody::Living(LivingSpec)` runs

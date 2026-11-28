@@ -625,6 +625,9 @@ pub struct GeneralStore {
     /// is the only path): each change retires the rider adjacency, which the
     /// rows' own write stamp does not see.
     pub mount_writes: u64,
+    /// Each general vehicle's kept rider places, by the vehicle's id: the
+    /// copy of its `horizon:rider_places` attachment every seat read takes.
+    pub(in crate::game) rider_places: FxHashMap<u32, Vec<riders::RiderPlace>>,
 }
 
 /// Root-to-rider adjacency of the general rows, as a first-child and
@@ -742,6 +745,16 @@ impl Game<'_> {
     /// Write each riding row's attachments into its own record inside the
     /// saved tree (`save_lists!` writes the root's): a rider's identity
     /// travels with its record, matched by UUID inside `Passengers`.
+    /// The general row `root` and its riders as one entity tag, as its chunk
+    /// saves it: a player's `RootVehicle` takes it. None for a row that
+    /// isn't here or doesn't save.
+    pub(in crate::game) fn general_tree_tag(&self, root: u32) -> Option<Tag> {
+        let record = self.general_row_record(root, &mut HashSet::new())?;
+        let mut tag = record.to_tag();
+        self.write_general_rider_attachments(&mut tag, root);
+        Some(tag)
+    }
+
     fn write_general_rider_attachments(&self, tag: &mut Tag, root: u32) {
         let rows = &self.resident_entities.general.rows;
         let Some(Tag::List(riders)) = tag.get_mut(format::PASSENGERS) else {
@@ -1028,6 +1041,8 @@ impl Game<'_> {
         self.resident_entities.general.rows.push(row);
         // Its own box, when its saved attachments carry one (`entity_set_bounds`).
         self.refresh_general_box(id);
+        // Its riders come back under new ids and are asked again.
+        self.forget_saved_rider_places(id);
         // The riders' tags sit inside `Passengers` in the order the record
         // tree was built from them, so each rider's own tag (its saved
         // attachments) is the one at its index.
@@ -1183,6 +1198,13 @@ pub(in crate::game) mod living;
 
 #[path = "general/draw.rs"]
 mod draw;
+
+#[path = "general/riders.rs"]
+pub(in crate::game) mod riders;
+
+#[cfg(test)]
+#[path = "general/riders_tests.rs"]
+mod riders_tests;
 
 #[cfg(test)]
 #[path = "general/save_load_tests.rs"]

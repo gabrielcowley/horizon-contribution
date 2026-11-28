@@ -198,6 +198,11 @@ impl Game<'_> {
                     self.native_tick_post_one(round, id, kind);
                 }
             }
+            // `Entity.rideTick`'s `positionRider`, after the rider's own
+            // tick: it sits where its vehicle's placement puts it.
+            if general_row_live(self, index, mount) {
+                self.position_general_rider(index);
+            }
             self.tick_general_riders(index, born, catalog, subscribed, epoch, round);
         }
     }

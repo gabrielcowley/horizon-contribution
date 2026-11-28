@@ -1735,9 +1735,25 @@ impl Game<'_> {
                 Some(cart) => self
                     .mob_object(rider)
                     .and_then(|rider| self.cart_dismount_point_from(cart, rider)),
+                // A general vehicle's parts say where, asked once here.
+                None if self.is_general_row(v) => {
+                    let mob = self.mob_object(rider).map(|mob| {
+                        (
+                            mob.position,
+                            f64::from(mob.width()),
+                            f64::from(mob.height()),
+                        )
+                    });
+                    mob.and_then(|(position, w, h)| {
+                        self.general_dismount_point(v, rider, position, w, h)
+                    })
+                }
                 None => self.mob_dismount_point(v, rider),
             }
         };
+        let general_reason = self
+            .is_general_row(v)
+            .then(|| self.general_removal_reason(v));
         let Some(m) = self.mob_object_mut(rider) else {
             return;
         };
@@ -1748,6 +1764,9 @@ impl Game<'_> {
         m.previous = at;
         self.snap_mob_passengers(rider);
         self.release_removed_vehicle(v);
+        if let Some(reason) = general_reason {
+            self.general_rider_left(v, rider, reason);
+        }
     }
     /// Where `dismount_mob` sets object `rider` down off the vehicle `v`: None when
     /// `v` is no boat, cart or mob.
@@ -1792,6 +1811,20 @@ impl Game<'_> {
                 f64::from(mob.height()),
                 y,
             ));
+        }
+        // A general vehicle: removed or in a portal, the removed vehicle's
+        // rule; otherwise vanilla's default, the top of its box. Its parts
+        // are asked only by an actual dismount.
+        if let Some(y) = self.general_vehicle_gone_y(v) {
+            return Some(self.removed_vehicle_dismount_point(
+                mob.position,
+                f64::from(mob.width()),
+                f64::from(mob.height()),
+                y,
+            ));
+        }
+        if let Some(at) = self.general_default_dismount(v) {
+            return Some(at);
         }
         let (width, yaw) = (f64::from(mob.width()), mob.yaw);
         if let Some(b) = self.boat_object(v) {

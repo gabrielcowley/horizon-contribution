@@ -64,6 +64,12 @@ impl Game<'_> {
                 vehicle_y.is_none()
                     || !matches!(self.native_entity_target(*passenger), Some(Target::Mob(_)))
             })
+            // A general row's general riders get off at the sweep
+            // (`eject_removed_general_riders`), so a removal made during the
+            // rows' tick pass leaves that pass's walk as it was.
+            .filter(|passenger| {
+                !matches!(self.native_entity_target(*passenger), Some(Target::General(_)))
+            })
             .collect();
         // `Entity.setRemoved`: the reason first, so the hooks below see
         // it removed; then the passengers get off and the level is told.
@@ -242,6 +248,10 @@ impl Game<'_> {
                     self.native_entity_left(id);
                 }
                 Target::Player | Target::Guest(_) | Target::Mob(_) => {}
+                Target::General(id) => {
+                    self.eject_removed_general_riders(id);
+                    self.kill_target_in_level(t);
+                }
                 // The remaining kinds `/kill` already removes with no death.
                 t => self.kill_target_in_level(t),
             }

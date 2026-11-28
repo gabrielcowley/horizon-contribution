@@ -60,8 +60,11 @@ fn other_height(kind: &str, tag: Option<&Tag>) -> (f64, f32) {
 }
 
 impl Game<'_> {
-    /// The armor stand or kept entity `id` as a vehicle, if it is one.
+    /// The armor stand, kept entity or general row `id` as a vehicle, if it is one.
     pub(super) fn seat(&self, id: u32) -> Option<Seat> {
+        if let Some(seat) = self.general_seat(id) {
+            return Some(seat);
+        }
         if let Some(a) = self.armor_stands.iter().find(|a| a.id == id) {
             // ArmorStand: sized(0.5F, 1.975F), half that when small, nothing as a
             // marker; the passenger point is the float height widened to double.
@@ -92,9 +95,24 @@ impl Game<'_> {
         })
     }
 
+    /// Where the acting player sits on such a vehicle now: a general row's
+    /// placement for it, the default passenger attachment otherwise.
+    pub(super) fn player_seat_on(&self, id: u32, seat: &Seat) -> Vec3 {
+        let scale = self.player.as_ref().map_or(1.0, |p| {
+            f64::from(p.dimensions.width)
+                / f64::from(horizon_client::pose::Pose::Standing.dimensions(1.0).width)
+        });
+        self.general_rider_seat(
+            id,
+            self.own_entity_id() as u32,
+            PLAYER_VEHICLE_ATTACHMENT * scale,
+        )
+        .unwrap_or_else(|| seat.player_seat())
+    }
+
     /// Seats the player in place on such a vehicle (`ServerPlayer.startRiding`: at once, as a teleport).
     pub(super) fn board_seat(&mut self, id: u32, seat: Seat) {
-        let at = seat.player_seat();
+        let at = self.player_seat_on(id, &seat);
         if let Some(player) = self.player.as_mut() {
             player.position = at;
             player.velocity = Vec3::ZERO;
@@ -118,7 +136,29 @@ impl Game<'_> {
         let Some(seat) = self.seat(id) else {
             return;
         };
-        let at = seat.dismount();
+        if self.is_general_row(id) {
+            // A general row: where its parts let the rider off, or by the
+            // removed vehicle's rule.
+            let me = self.own_entity_id() as u32;
+            let Some(p) = self.player.as_ref() else {
+                return;
+            };
+            let (position, w, h) = (
+                p.position,
+                f64::from(p.dimensions.width),
+                f64::from(p.dimensions.height),
+            );
+            let reason = self.general_removal_reason(id);
+            let at = self.general_dismount_point(id, me, position, w, h);
+            self.place_off_seat(at.unwrap_or(position));
+            self.general_rider_left(id, me, reason);
+            return;
+        }
+        self.place_off_seat(seat.dismount());
+    }
+
+    /// The player stands at `at`, off its seat.
+    fn place_off_seat(&mut self, at: Vec3) {
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
             p.position = at;
@@ -135,7 +175,7 @@ impl Game<'_> {
             self.get_off_seat();
             return None;
         }
-        let at = seat.player_seat();
+        let at = self.player_seat_on(self.riding?, &seat);
         if let Some(p) = self.player.as_mut() {
             self.previous_position = p.position;
             p.position = at;
@@ -154,13 +194,18 @@ impl Game<'_> {
                 continue;
             };
             for &j in js {
-                let m = &mut self.mobs[j];
+                let m = &self.mobs[j];
                 let offset = horizon_client::mobs::riders::vehicle_attachment(m, seat.width);
-                let at = Vec3::new(
-                    seat.position.x,
-                    seat.position.y + seat.height - offset,
-                    seat.position.z,
-                );
+                let at = self
+                    .general_rider_seat(vehicle, m.id, offset)
+                    .unwrap_or_else(|| {
+                        Vec3::new(
+                            seat.position.x,
+                            seat.position.y + seat.height - offset,
+                            seat.position.z,
+                        )
+                    });
+                let m = &mut self.mobs[j];
                 m.position = at;
                 m.previous = at;
                 m.velocity = Vec3::ZERO;

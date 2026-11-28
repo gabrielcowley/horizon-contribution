@@ -1344,6 +1344,23 @@ impl Game<'_> {
                 true
             })
     }
+    /// `TamableAnimal.setInSittingPose`: whether a tamable animal sits, its
+    /// order to sit left as it is. Marks the mob for sync. False for a kind
+    /// that is not a `TamableAnimal` (a horse has no sitting pose), a player
+    /// or a stale handle.
+    pub(super) fn living_set_in_sitting_pose(&mut self, living: LivingRef, sitting: bool) -> bool {
+        let Some(Target::Mob(id)) = self.native_living_target(living) else {
+            return false;
+        };
+        self.mobs
+            .iter_mut()
+            .find(|m| m.id == id && m.is_tamable_animal())
+            .is_some_and(|m| {
+                m.extra.sitting_pose = sitting;
+                m.needs_sync = true;
+                true
+            })
+    }
     /// The owner's UUID (`OwnableEntity.getOwnerReference`): None for a wild
     /// mob, a kind that can't be tamed, or a stale handle. API @API:living_refs@.
     pub(super) fn living_owner(&self, living: LivingRef) -> Option<u128> {

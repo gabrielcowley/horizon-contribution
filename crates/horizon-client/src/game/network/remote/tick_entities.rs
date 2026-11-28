@@ -814,6 +814,8 @@ impl Game<'_> {
                     })
                 },
             );
+            // A general row riding another sits on it after both eased.
+            self.position_remote_general_riders();
             // LightningBolt.tick on a client.
             self.tick_bolts();
         }
